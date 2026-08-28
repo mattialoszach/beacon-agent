@@ -1,0 +1,208 @@
+import AppKit
+import SwiftUI
+
+private enum AppSection: String, CaseIterable, Identifiable {
+    case home = "Home"
+    case history = "Guide History"
+    case privacy = "Privacy"
+    case models = "Models"
+    case permissions = "Permissions"
+    case inspector = "Developer Inspector"
+
+    var id: String { rawValue }
+    var icon: String {
+        switch self {
+        case .home: "house"
+        case .history: "clock.arrow.circlepath"
+        case .privacy: "lock.shield"
+        case .models: "cpu"
+        case .permissions: "checkmark.shield"
+        case .inspector: "viewfinder"
+        }
+    }
+}
+
+struct MainWindowView: View {
+    @EnvironmentObject private var controller: BeaconController
+    @State private var selection: AppSection? = .home
+
+    var body: some View {
+        NavigationSplitView {
+            List(AppSection.allCases, selection: $selection) { section in
+                Label(section.rawValue, systemImage: section.icon).tag(section)
+            }
+            .navigationTitle("Beacon")
+            .safeAreaInset(edge: .bottom) {
+                StatusPill()
+                    .environmentObject(controller)
+                    .padding(10)
+            }
+        } detail: {
+            switch selection ?? .home {
+            case .home: HomeView()
+            case .history: HistoryView()
+            case .privacy: PrivacyView()
+            case .models: ModelSettingsView()
+            case .permissions: PermissionsView()
+            case .inspector: DeveloperInspectorView()
+            }
+        }
+        .alert("Beacon", isPresented: Binding(
+            get: { controller.errorMessage != nil },
+            set: { _ in }
+        )) {
+            Button("OK") { controller.cancel() }
+        } message: {
+            Text(controller.errorMessage ?? "Unknown error")
+        }
+    }
+}
+
+private struct StatusPill: View {
+    @EnvironmentObject private var controller: BeaconController
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Circle()
+                .fill(controller.isObserving ? .orange : .green)
+                .frame(width: 7, height: 7)
+            Text(controller.statusMessage)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+            Spacer(minLength: 0)
+        }
+        .padding(9)
+        .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 9))
+    }
+}
+
+private struct HomeView: View {
+    @EnvironmentObject private var controller: BeaconController
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Image(systemName: "scope")
+                        .font(.system(size: 34, weight: .medium))
+                        .foregroundStyle(Color.accentColor)
+                    Text("Ask. See. Do.")
+                        .font(.system(size: 34, weight: .bold, design: .rounded))
+                    Text("Beacon finds real controls in the app you're using and points you to the next step. You stay in control.")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: 650, alignment: .leading)
+                }
+
+                HStack(spacing: 12) {
+                    Button { controller.showPrompt(mode: .guide) } label: {
+                        Label("Start a Guide", systemImage: "arrow.right.circle.fill")
+                            .frame(minWidth: 130)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+
+                    Button { controller.showPrompt(mode: .ask) } label: {
+                        Label("Ask about Screen", systemImage: "text.bubble")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                }
+
+                HStack(spacing: 14) {
+                    FeatureCard(icon: "keyboard", title: "Option + Space", detail: "Open Beacon beside your pointer from anywhere.")
+                    FeatureCard(icon: "cursorarrow.rays", title: "Native guidance", detail: "Highlights are click-through and dismiss with Escape.")
+                    FeatureCard(icon: "lock.shield", title: "Private by design", detail: "Accessibility matching runs on your Mac by default.")
+                }
+
+                if let response = controller.currentResponse {
+                    GroupBox("Latest guidance") {
+                        VStack(alignment: .leading, spacing: 9) {
+                            Text(controller.currentQuestion ?? "")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text(response.message).font(.title3.weight(.semibold))
+                            if let target = controller.selectedTarget {
+                                Text("\(controller.groundingStrategy) · \(Int((controller.groundingConfidence ?? 0) * 100))% confidence · \(String(describing: target))")
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(6)
+                    }
+                }
+            }
+            .padding(32)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .navigationTitle("Home")
+    }
+}
+
+private struct FeatureCard: View {
+    let icon: String
+    let title: String
+    let detail: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Image(systemName: icon).font(.title2).foregroundStyle(Color.accentColor)
+            Text(title).font(.headline)
+            Text(detail).font(.callout).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, minHeight: 112, alignment: .topLeading)
+        .padding(16)
+        .background(.quaternary.opacity(0.42), in: RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+private struct HistoryView: View {
+    @EnvironmentObject private var controller: BeaconController
+
+    var body: some View {
+        Group {
+            if controller.history.isEmpty {
+                ContentUnavailableView(
+                    "No guides yet",
+                    systemImage: "arrow.triangle.branch",
+                    description: Text("Press Option + Space to ask Beacon for guidance.")
+                )
+            } else {
+                List(controller.history) { item in
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack {
+                            Text(item.question).font(.headline)
+                            Spacer()
+                            if let succeeded = item.succeeded {
+                                Image(systemName: succeeded ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                    .foregroundStyle(succeeded ? .green : .red)
+                            }
+                        }
+                        Text(item.answer)
+                        Text("\(item.applicationName) · \(item.date.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 5)
+                }
+            }
+        }
+        .navigationTitle("Guide History")
+    }
+}
+
+struct SettingsView: View {
+    @EnvironmentObject private var controller: BeaconController
+
+    var body: some View {
+        TabView {
+            ModelSettingsView().tabItem { Label("Models", systemImage: "cpu") }
+            PrivacyView().tabItem { Label("Privacy", systemImage: "lock.shield") }
+            PermissionsView().tabItem { Label("Permissions", systemImage: "checkmark.shield") }
+        }
+        .environmentObject(controller)
+        .padding()
+    }
+}

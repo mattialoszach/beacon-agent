@@ -1,0 +1,151 @@
+import AppKit
+import SwiftUI
+
+struct OverlayCanvasView: View {
+    let presentation: OverlayController.Presentation
+    let screenFrame: CGRect
+    let mapper: CoordinateSpaceMapper
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .topLeading) {
+                if presentation.style == .spotlight, let targetRect {
+                    Canvas { context, size in
+                        var path = Path(CGRect(origin: .zero, size: size))
+                        path.addRoundedRect(in: targetRect.insetBy(dx: -8, dy: -8), cornerSize: CGSize(width: 10, height: 10))
+                        context.fill(path, with: .color(.black.opacity(0.52)), style: FillStyle(eoFill: true))
+                    }
+                }
+
+                if let targetRect {
+                    TargetHighlight(style: presentation.style)
+                        .frame(width: max(12, targetRect.width), height: max(12, targetRect.height))
+                        .position(x: targetRect.midX, y: targetRect.midY)
+
+                    InstructionCallout(text: presentation.instruction, target: targetRect, availableSize: proxy.size)
+
+                    if presentation.style == .arrow {
+                        GuidanceArrow(target: targetRect, availableSize: proxy.size)
+                    }
+                }
+
+                ForEach(presentation.debugElements) { element in
+                    if let rect = localRect(for: element.bounds), rect.intersects(CGRect(origin: .zero, size: proxy.size)) {
+                        DebugElementView(element: element)
+                            .frame(width: max(18, rect.width), height: max(18, rect.height))
+                            .position(x: rect.midX, y: rect.midY)
+                    }
+                }
+            }
+        }
+        .ignoresSafeArea()
+    }
+
+    private var targetRect: CGRect? {
+        localRect(for: presentation.target?.bounds)
+    }
+
+    private func localRect(for bounds: NormalizedRect?) -> CGRect? {
+        guard let bounds, let global = mapper.appKitRect(from: bounds) else { return nil }
+        return CGRect(
+            x: global.minX - screenFrame.minX,
+            y: screenFrame.maxY - global.maxY,
+            width: global.width,
+            height: global.height
+        )
+    }
+}
+
+private struct GuidanceArrow: View {
+    let target: CGRect
+    let availableSize: CGSize
+
+    var body: some View {
+        Canvas { context, _ in
+            let rightSide = target.midX < availableSize.width / 2
+            let start = CGPoint(
+                x: rightSide ? min(availableSize.width - 24, target.maxX + 92) : max(24, target.minX - 92),
+                y: max(24, target.minY - 62)
+            )
+            let end = CGPoint(x: target.midX, y: target.midY)
+            var shaft = Path()
+            shaft.move(to: start)
+            shaft.addLine(to: end)
+            context.stroke(shaft, with: .color(.accentColor), style: StrokeStyle(lineWidth: 5, lineCap: .round))
+
+            let angle = atan2(end.y - start.y, end.x - start.x)
+            let wing: CGFloat = 17
+            var head = Path()
+            head.move(to: end)
+            head.addLine(to: CGPoint(x: end.x - wing * cos(angle - .pi / 6), y: end.y - wing * sin(angle - .pi / 6)))
+            head.move(to: end)
+            head.addLine(to: CGPoint(x: end.x - wing * cos(angle + .pi / 6), y: end.y - wing * sin(angle + .pi / 6)))
+            context.stroke(head, with: .color(.accentColor), style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+private struct TargetHighlight: View {
+    let style: OverlayStyle
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: style == .circle ? 999 : 8)
+            .stroke(Color.accentColor, lineWidth: 4)
+            .background(
+                RoundedRectangle(cornerRadius: style == .circle ? 999 : 8)
+                    .fill(Color.accentColor.opacity(0.12))
+            )
+            .shadow(color: .black.opacity(0.35), radius: 8)
+            .animation(.easeOut(duration: 0.18), value: style)
+    }
+}
+
+private struct InstructionCallout: View {
+    let text: String
+    let target: CGRect
+    let availableSize: CGSize
+
+    private var position: CGPoint {
+        let estimatedWidth: CGFloat = 230
+        let x = min(max(estimatedWidth / 2 + 12, target.midX), availableSize.width - estimatedWidth / 2 - 12)
+        let preferredY = target.maxY + 42
+        return CGPoint(x: x, y: min(preferredY, availableSize.height - 36))
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.up.left")
+                .foregroundStyle(Color.accentColor)
+            Text(text)
+                .font(.system(size: 14, weight: .semibold))
+                .lineLimit(2)
+        }
+        .foregroundStyle(.primary)
+        .padding(.horizontal, 13)
+        .padding(.vertical, 10)
+        .frame(maxWidth: 230)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.2)))
+        .shadow(radius: 12)
+        .position(position)
+    }
+}
+
+private struct DebugElementView: View {
+    let element: UIElementDescriptor
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            Rectangle()
+                .stroke(element.focused ? .yellow : .cyan, lineWidth: element.focused ? 3 : 1)
+            Text("[\(element.id.replacingOccurrences(of: "e_", with: ""))] \(element.bestLabel)")
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 3)
+                .padding(.vertical, 2)
+                .background(.black.opacity(0.85))
+                .fixedSize()
+        }
+    }
+}
