@@ -9,7 +9,7 @@ struct ModelSettingsView: View {
     var body: some View {
         Form {
             Section("Instructor") {
-                Picker("Model", selection: $controller.modelSettings.provider) {
+                Picker("Provider", selection: $controller.modelSettings.provider) {
                     ForEach(ModelProviderChoice.allCases) { Text($0.rawValue).tag($0) }
                 }
                 Text(providerDescription)
@@ -25,7 +25,14 @@ struct ModelSettingsView: View {
                         isOn: $controller.privacySettings.cloudVisionEnabled
                     )
                     .disabled(!controller.privacySettings.cloudProcessingEnabled)
-                    TextField("Model", text: $controller.modelSettings.openAIModel)
+                    Picker("Model", selection: $controller.modelSettings.openAIModel) {
+                        ForEach(OpenAIModelChoice.allCases) { model in
+                            Text(model.displayName).tag(model)
+                        }
+                    }
+                    Text(controller.modelSettings.openAIModel.summary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 8) {
                         Text("API key")
                             .font(.subheadline)

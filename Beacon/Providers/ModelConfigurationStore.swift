@@ -9,13 +9,37 @@ enum ModelProviderChoice: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum OpenAIModelChoice: String, CaseIterable, Identifiable {
+    case terra = "gpt-5.6-terra"
+    case luna = "gpt-5.6-luna"
+    case sol = "gpt-5.6-sol"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .terra: "GPT-5.6 Terra"
+        case .luna: "GPT-5.6 Luna"
+        case .sol: "GPT-5.6 Sol"
+        }
+    }
+
+    var summary: String {
+        switch self {
+        case .terra: "Recommended balance of instruction quality, speed, and cost."
+        case .luna: "Faster, lower-cost reasoning for straightforward guidance."
+        case .sol: "Highest-quality reasoning for complex interfaces and requests."
+        }
+    }
+}
+
 @MainActor
 final class ModelConfigurationStore: ObservableObject {
     @Published var provider: ModelProviderChoice {
         didSet { defaults.set(provider.rawValue, forKey: Keys.provider) }
     }
-    @Published var openAIModel: String {
-        didSet { defaults.set(openAIModel, forKey: Keys.openAIModel) }
+    @Published var openAIModel: OpenAIModelChoice {
+        didSet { defaults.set(openAIModel.rawValue, forKey: Keys.openAIModel) }
     }
     @Published var apiKey: String = ""
     @Published private(set) var hasStoredAPIKey = false
@@ -35,7 +59,8 @@ final class ModelConfigurationStore: ObservableObject {
         let savedProvider = ModelProviderChoice(rawValue: defaults.string(forKey: Keys.provider) ?? "") ?? .accessibility
         let usedLegacyLocalOnlyMode = defaults.string(forKey: Keys.legacyProcessingMode) == "Local Only"
         provider = savedProvider == .openAI && usedLegacyLocalOnlyMode ? .accessibility : savedProvider
-        openAIModel = defaults.string(forKey: Keys.openAIModel) ?? "gpt-5-mini"
+        let savedOpenAIModel = defaults.string(forKey: Keys.openAIModel)
+        openAIModel = savedOpenAIModel.flatMap(OpenAIModelChoice.init(rawValue:)) ?? .terra
         apiKey = apiKeyStorage.read() ?? ""
         hasStoredAPIKey = !apiKey.isEmpty
 
@@ -44,6 +69,9 @@ final class ModelConfigurationStore: ObservableObject {
         defaults.removeObject(forKey: Keys.legacyProcessingMode)
         if provider != savedProvider {
             defaults.set(provider.rawValue, forKey: Keys.provider)
+        }
+        if savedOpenAIModel != openAIModel.rawValue {
+            defaults.set(openAIModel.rawValue, forKey: Keys.openAIModel)
         }
     }
 

@@ -56,6 +56,36 @@ final class SettingsStoreTests: XCTestCase {
         }
     }
 
+    func testOpenAIModelUsesRecommendedDefaultAndPersistsSelection() {
+        withDefaults { defaults in
+            let storage = InMemoryAPIKeyStorage()
+            let store = ModelConfigurationStore(defaults: defaults, apiKeyStorage: storage)
+
+            XCTAssertEqual(store.openAIModel, .terra)
+
+            store.openAIModel = .luna
+
+            XCTAssertEqual(
+                ModelConfigurationStore(defaults: defaults, apiKeyStorage: storage).openAIModel,
+                .luna
+            )
+        }
+    }
+
+    func testUnsupportedFreeFormOpenAIModelMigratesToRecommendedChoice() {
+        withDefaults { defaults in
+            defaults.set("gpt-5-mini", forKey: "models.openAIModel")
+
+            let store = ModelConfigurationStore(
+                defaults: defaults,
+                apiKeyStorage: InMemoryAPIKeyStorage()
+            )
+
+            XCTAssertEqual(store.openAIModel, .terra)
+            XCTAssertEqual(defaults.string(forKey: "models.openAIModel"), OpenAIModelChoice.terra.rawValue)
+        }
+    }
+
     func testStoredAPIKeyCanBeRemoved() throws {
         try withDefaults { defaults in
             let storage = InMemoryAPIKeyStorage(value: "sk-test-key")

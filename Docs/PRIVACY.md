@@ -19,7 +19,7 @@ Cloud processing has a separate opt-in and is disabled by default. The OpenAI ad
 
 Images require a second, independent **Allow the redacted visual preview** opt-in. When enabled, Beacon redacts the screenshot locally, draws the validated Set-of-Marks badges over that redacted image, and exposes the exact outbound image under **Privacy**. Only that displayed numbered image becomes eligible for the OpenAI request. The toggle is off by default, and application exclusions always override it.
 
-The model screen exposes one provider choice instead of quality presets. Selecting OpenAI does not grant cloud access: the separate cloud-processing toggle remains the authoritative consent boundary, and Beacon falls back to its local Accessibility matcher while that toggle is off.
+The model screen exposes one provider choice instead of ambiguous quality presets. OpenAI users choose from a bounded list of supported models rather than entering an arbitrary model identifier. Selecting OpenAI does not grant cloud access: the separate cloud-processing toggle remains the authoritative consent boundary, and Beacon falls back to its local Accessibility matcher while that toggle is off.
 
 The optional Developer Inspector is hidden by default. When enabled, it displays local perception results, redaction counts, intent classification, and the exact bounded text context provided to the configured reasoning model. The normal Privacy screen exposes the outbound image so visual consent does not depend on enabling developer tools.
 

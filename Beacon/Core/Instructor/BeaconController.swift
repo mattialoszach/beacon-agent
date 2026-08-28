@@ -230,7 +230,7 @@ final class BeaconController: ObservableObject {
                 return AccessibilityHeuristicProvider()
             }
             return OpenAIProvider(
-                model: modelSettings.openAIModel,
+                model: modelSettings.openAIModel.rawValue,
                 apiKey: modelSettings.apiKey,
                 allowsVision: privacySettings.cloudVisionEnabled
             )
