@@ -4,6 +4,7 @@ struct ModelSettingsView: View {
     @EnvironmentObject private var controller: BeaconController
     @EnvironmentObject private var appPreferences: AppPreferencesStore
     @State private var keyStatus = ""
+    @State private var isConfirmingAPIKeyRemoval = false
 
     var body: some View {
         Form {
@@ -25,15 +26,40 @@ struct ModelSettingsView: View {
                     )
                     .disabled(!controller.privacySettings.cloudProcessingEnabled)
                     TextField("Model", text: $controller.modelSettings.openAIModel)
-                    SecureField("API key", text: $controller.modelSettings.apiKey)
-                    HStack {
-                        Button("Save in Keychain") {
-                            do {
-                                try controller.modelSettings.saveAPIKey()
-                                keyStatus = "Saved"
-                            } catch { keyStatus = error.localizedDescription }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("API key")
+                            .font(.subheadline)
+                        SecureField(
+                            "API key",
+                            text: $controller.modelSettings.apiKey,
+                            prompt: Text("Paste your OpenAI API key")
+                        )
+                        .labelsHidden()
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: .infinity)
+
+                        HStack(spacing: 8) {
+                            Button("Save in Keychain") {
+                                do {
+                                    try controller.modelSettings.saveAPIKey()
+                                    keyStatus = "Saved"
+                                } catch { keyStatus = error.localizedDescription }
+                            }
+                            .disabled(apiKeyDraftIsEmpty)
+                            Button(role: .destructive) {
+                                isConfirmingAPIKeyRemoval = true
+                            } label: {
+                                Label("Remove", systemImage: "trash")
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(.red)
+                            .disabled(!controller.modelSettings.hasStoredAPIKey)
+                            .help("Remove API key from Keychain")
+                            .accessibilityLabel("Remove API key from Keychain")
+                            Text(apiKeyStatus)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
-                        Text(keyStatus).font(.caption).foregroundStyle(.secondary)
                     }
                     Text(controller.privacySettings.cloudVisionEnabled
                         ? "OpenAI receives the bounded scene text and the exact redacted, numbered image shown under Privacy. Excluded applications never send an image."
@@ -52,6 +78,32 @@ struct ModelSettingsView: View {
         }
         .formStyle(.grouped)
         .navigationTitle("Models")
+        .confirmationDialog(
+            "Remove OpenAI API key?",
+            isPresented: $isConfirmingAPIKeyRemoval,
+            titleVisibility: .visible
+        ) {
+            Button("Delete from Keychain", role: .destructive) {
+                do {
+                    try controller.modelSettings.removeAPIKey()
+                    keyStatus = "Removed from Keychain"
+                } catch {
+                    keyStatus = error.localizedDescription
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Beacon will delete the stored key from macOS Keychain. You can add another key later.")
+        }
+    }
+
+    private var apiKeyStatus: String {
+        if !keyStatus.isEmpty { return keyStatus }
+        return controller.modelSettings.hasStoredAPIKey ? "Stored in Keychain" : "Not saved"
+    }
+
+    private var apiKeyDraftIsEmpty: Bool {
+        controller.modelSettings.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var providerDescription: String {

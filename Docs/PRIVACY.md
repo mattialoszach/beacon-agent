@@ -15,7 +15,7 @@ Beacon's default path is local and Accessibility-first. No account, API key, scr
 
 ## Cloud boundary
 
-Cloud processing has a separate opt-in and is disabled by default. The OpenAI adapter sends the user's question plus bounded, privacy-filtered application, window, accessible-control, visual-candidate, and mark metadata. API keys are kept in the macOS Keychain, not UserDefaults or repository files, and Responses API requests set `store` to false.
+Cloud processing has a separate opt-in and is disabled by default. The OpenAI adapter sends the user's question plus bounded, privacy-filtered application, window, accessible-control, visual-candidate, and mark metadata. API keys are kept in the macOS Keychain, not UserDefaults or repository files, and can be removed again from Model settings. Responses API requests set `store` to false.
 
 Images require a second, independent **Allow the redacted visual preview** opt-in. When enabled, Beacon redacts the screenshot locally, draws the validated Set-of-Marks badges over that redacted image, and exposes the exact outbound image under **Privacy**. Only that displayed numbered image becomes eligible for the OpenAI request. The toggle is off by default, and application exclusions always override it.
 

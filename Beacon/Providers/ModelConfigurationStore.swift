@@ -18,17 +18,26 @@ final class ModelConfigurationStore: ObservableObject {
         didSet { defaults.set(openAIModel, forKey: Keys.openAIModel) }
     }
     @Published var apiKey: String = ""
+    @Published private(set) var hasStoredAPIKey = false
 
     private let defaults: UserDefaults
-    private let keychain = KeychainStore(service: "org.beacon.agent")
+    private let apiKeyStorage: any APIKeyStorage
 
-    init(defaults: UserDefaults = .standard) {
+    init(
+        defaults: UserDefaults = .standard,
+        apiKeyStorage: any APIKeyStorage = KeychainAPIKeyStorage(
+            service: "org.beacon.agent",
+            account: "openai-api-key"
+        )
+    ) {
         self.defaults = defaults
+        self.apiKeyStorage = apiKeyStorage
         let savedProvider = ModelProviderChoice(rawValue: defaults.string(forKey: Keys.provider) ?? "") ?? .accessibility
         let usedLegacyLocalOnlyMode = defaults.string(forKey: Keys.legacyProcessingMode) == "Local Only"
         provider = savedProvider == .openAI && usedLegacyLocalOnlyMode ? .accessibility : savedProvider
         openAIModel = defaults.string(forKey: Keys.openAIModel) ?? "gpt-5-mini"
-        apiKey = keychain.read(account: "openai-api-key") ?? ""
+        apiKey = apiKeyStorage.read() ?? ""
+        hasStoredAPIKey = !apiKey.isEmpty
 
         // Processing modes other than Local Only never affected routing. Cloud consent is
         // now represented by the single privacy setting, so remove the obsolete value.
@@ -39,7 +48,16 @@ final class ModelConfigurationStore: ObservableObject {
     }
 
     func saveAPIKey() throws {
-        try keychain.write(apiKey.trimmingCharacters(in: .whitespacesAndNewlines), account: "openai-api-key")
+        let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        try apiKeyStorage.write(trimmedAPIKey)
+        apiKey = trimmedAPIKey
+        hasStoredAPIKey = !trimmedAPIKey.isEmpty
+    }
+
+    func removeAPIKey() throws {
+        try apiKeyStorage.delete()
+        apiKey = ""
+        hasStoredAPIKey = false
     }
 
     private enum Keys {
@@ -49,10 +67,17 @@ final class ModelConfigurationStore: ObservableObject {
     }
 }
 
-private struct KeychainStore {
-    let service: String
+protocol APIKeyStorage {
+    func read() -> String?
+    func write(_ value: String) throws
+    func delete() throws
+}
 
-    func read(account: String) -> String? {
+struct KeychainAPIKeyStorage: APIKeyStorage {
+    let service: String
+    let account: String
+
+    func read() -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -66,13 +91,9 @@ private struct KeychainStore {
         return String(data: data, encoding: .utf8)
     }
 
-    func write(_ value: String, account: String) throws {
-        let base: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account
-        ]
-        SecItemDelete(base as CFDictionary)
+    func write(_ value: String) throws {
+        let base = keychainQuery
+        try delete()
         guard !value.isEmpty else { return }
         var item = base
         item[kSecValueData as String] = Data(value.utf8)
@@ -80,5 +101,20 @@ private struct KeychainStore {
         guard status == errSecSuccess else {
             throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
         }
+    }
+
+    func delete() throws {
+        let status = SecItemDelete(keychainQuery as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
+        }
+    }
+
+    private var keychainQuery: [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
     }
 }
