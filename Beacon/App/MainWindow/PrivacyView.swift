@@ -43,7 +43,8 @@ struct PrivacyView: View {
                             systemImage: "eye.slash",
                             description: Text("A preview appears here after a visual OpenAI request. The exact image is redacted before it becomes eligible to leave your Mac.")
                         )
-                        .frame(minHeight: 150)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity, minHeight: 150, alignment: .center)
                     }
                 }
             }
