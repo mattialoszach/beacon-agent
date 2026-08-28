@@ -4,6 +4,7 @@ struct ModelSceneContext: Equatable, Sendable {
     let text: String
     let includedElementIDs: Set<String>
     let includedVisualElementIDs: Set<String>
+    let includedMarkIDs: Set<Int>
     let includedElementCount: Int
     let omittedElementCount: Int
 }
@@ -22,6 +23,12 @@ struct ModelContextBuilder: Sendable {
     func build(for request: InstructorRequest) -> ModelSceneContext {
         let queryTokens = tokens(request.question)
         let windowBounds = request.scene.activeWindow?.bounds
+        let marksByElementID = Dictionary(uniqueKeysWithValues: request.setOfMarks.compactMap { mark in
+            mark.elementID.map { ($0, mark.id) }
+        })
+        let marksByVisualElementID = Dictionary(uniqueKeysWithValues: request.setOfMarks.compactMap { mark in
+            mark.visualElementID.map { ($0, mark.id) }
+        })
         let ranked = request.scene.elements
             .filter { $0.enabled && $0.bounds?.isValid == true }
             .map { element in
@@ -35,12 +42,15 @@ struct ModelContextBuilder: Sendable {
 
         var lines: [String] = []
         var ids = Set<String>()
+        var markIDs = Set<Int>()
         var characterCount = 0
         for candidate in ranked.prefix(maximumElements) {
-            let line = promptLine(for: candidate.element)
+            let markID = marksByElementID[candidate.element.id]
+            let line = promptLine(for: candidate.element, markID: markID)
             guard characterCount + line.count + 1 <= maximumCharacters else { break }
             lines.append(line)
             ids.insert(candidate.element.id)
+            if let markID { markIDs.insert(markID) }
             characterCount += line.count + 1
         }
 
@@ -50,10 +60,13 @@ struct ModelContextBuilder: Sendable {
         var visualIDs = Set<String>()
         for visual in selectedVisualElements {
             let bounds = format(visual.bounds)
-            let line = "[\(visual.id)] visualText \"\(sanitized(visual.text, limit: 100))\" confidence=\(Int(visual.confidence * 100))% bounds=\(bounds)"
+            let markID = marksByVisualElementID[visual.id]
+            let mark = markID.map { " mark=\($0)" } ?? ""
+            let line = "[\(visual.id)\(mark)] visual=\(visual.kind.rawValue) \"\(sanitized(visual.bestLabel, limit: 100))\" confidence=\(Int(visual.confidence * 100))% bounds=\(bounds)"
             guard characterCount + line.count + 1 <= maximumCharacters else { continue }
             lines.append(line)
             visualIDs.insert(visual.id)
+            if let markID { markIDs.insert(markID) }
             characterCount += line.count + 1
         }
 
@@ -69,12 +82,14 @@ struct ModelContextBuilder: Sendable {
         Window: \(sanitized(request.scene.activeWindow?.title ?? "Unknown", limit: 140))
         Mode: \(request.mode.rawValue)
         \(guide)
-        Visible controls (ranked; \(omitted) lower-priority controls omitted):
+        Visible controls (ranked; \(omitted) lower-priority controls omitted).
+        Prefer stable element IDs. A mark number refers to the same numbered region in the local visual preview:
         """
         return ModelSceneContext(
             text: header + "\n" + lines.joined(separator: "\n"),
             includedElementIDs: ids,
             includedVisualElementIDs: visualIDs,
+            includedMarkIDs: markIDs,
             includedElementCount: ids.count,
             omittedElementCount: omitted
         )
@@ -96,11 +111,12 @@ struct ModelContextBuilder: Sendable {
         return result
     }
 
-    private func promptLine(for element: UIElementDescriptor) -> String {
+    private func promptLine(for element: UIElementDescriptor, markID: Int?) -> String {
         let role = sanitized(element.role ?? "UIElement", limit: 40)
         let label = sanitized(element.bestLabel, limit: 120)
         let flags = [element.focused ? "focused" : nil].compactMap { $0 }.joined(separator: ",")
-        return "[\(element.id)] \(role) \"\(label)\"\(flags.isEmpty ? "" : " (\(flags))")"
+        let mark = markID.map { " mark=\($0)" } ?? ""
+        return "[\(element.id)\(mark)] \(role) \"\(label)\"\(flags.isEmpty ? "" : " (\(flags))")"
     }
 
     private func tokens(_ text: String) -> Set<String> {

@@ -39,6 +39,17 @@ final class SettingsStoreTests: XCTestCase {
         }
     }
 
+    func testCloudVisionRequiresASeparatePersistedOptIn() {
+        withDefaults { defaults in
+            let settings = PrivacySettingsStore(defaults: defaults)
+            XCTAssertFalse(settings.cloudVisionEnabled)
+
+            settings.cloudVisionEnabled = true
+
+            XCTAssertTrue(PrivacySettingsStore(defaults: defaults).cloudVisionEnabled)
+        }
+    }
+
     private func withDefaults(_ body: (UserDefaults) -> Void) {
         let suiteName = "SettingsStoreTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!

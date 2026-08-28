@@ -68,6 +68,12 @@ struct DeveloperInspectorView: View {
                         GroupBox("Grounding") {
                             LabeledContent("Application", value: scene.activeApplication.name)
                             LabeledContent("Window", value: scene.activeWindow?.title ?? "—")
+                            LabeledContent(
+                                "Request mode",
+                                value: controller.requestModeClassification.map {
+                                    "\($0.mode.rawValue) (\(Int($0.confidence * 100))%)"
+                                } ?? "—"
+                            )
                             LabeledContent("Strategy", value: controller.groundingStrategy)
                             LabeledContent("Confidence", value: controller.groundingConfidence.map { "\(Int($0 * 100))%" } ?? "—")
                         }
@@ -98,7 +104,7 @@ struct DeveloperInspectorView: View {
                     VStack(alignment: .leading, spacing: 0) {
                         Picker("Candidates", selection: $candidateSource) {
                             Text("Accessibility (\(scene.elements.count))").tag(CandidateSource.accessibility)
-                            Text("Vision OCR (\(scene.visualElements.count))").tag(CandidateSource.vision)
+                            Text("Local Vision (\(scene.visualElements.count))").tag(CandidateSource.vision)
                         }
                         .pickerStyle(.segmented)
                         .padding()
@@ -125,6 +131,9 @@ struct DeveloperInspectorView: View {
                                 VStack(alignment: .leading, spacing: 3) {
                                     HStack {
                                         Text(element.id).font(.caption.monospaced()).foregroundStyle(.purple)
+                                        Text(element.kind.displayName.uppercased())
+                                            .font(.caption2.bold())
+                                            .foregroundStyle(.secondary)
                                         Spacer()
                                         Text("\(Int(element.confidence * 100))%")
                                             .font(.caption.monospaced())

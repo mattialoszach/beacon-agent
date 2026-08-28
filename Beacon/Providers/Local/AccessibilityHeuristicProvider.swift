@@ -5,12 +5,16 @@ struct AccessibilityHeuristicProvider: InstructorModel {
     let capabilities: ModelCapabilities = [.text, .structuredOutput, .local]
 
     func reason(request: InstructorRequest) async throws -> InstructorResponse {
-        if request.mode == .ask || looksExplanatory(request.question) {
+        if request.mode == .ask {
             return InstructorResponse(
                 message: explanation(for: request),
                 action: nil,
                 expectedOutcome: nil
             )
+        }
+
+        if let planned = ApplicationGuidePlanner().response(for: request) {
+            return planned
         }
 
         let completedIDs = Set(request.guideContext?.completedSteps.compactMap(\.targetElementID) ?? [])
@@ -20,6 +24,22 @@ struct AccessibilityHeuristicProvider: InstructorModel {
         }
         guard let match = SemanticElementMatcher.bestMatch(for: request.question, in: availableElements)
             ?? navigationFallback(for: request.question, in: availableElements) else {
+            if let mark = SetOfMarksMatcher.bestMatch(for: request.question, in: request.setOfMarks) {
+                return InstructorResponse(
+                    message: "Select \(mark.mark.label).",
+                    action: SuggestedAction(
+                        type: .pointToElement,
+                        targetElementId: nil,
+                        targetBounds: nil,
+                        targetMark: mark.mark.id,
+                        overlay: mark.mark.source == .accessibility ? .spotlight : .rectangle
+                    ),
+                    expectedOutcome: ExpectedOutcome(
+                        type: .visualChange,
+                        description: "The visible interface should change after selecting \(mark.mark.label)."
+                    )
+                )
+            }
             if let visual = VisualElementMatcher.bestMatch(for: request.question, in: request.scene.visualElements) {
                 return InstructorResponse(
                     message: "Select \(visual.element.text).",
@@ -58,11 +78,6 @@ struct AccessibilityHeuristicProvider: InstructorModel {
                 description: "The visible interface should change after selecting \(match.element.bestLabel)."
             )
         )
-    }
-
-    private func looksExplanatory(_ question: String) -> Bool {
-        let lower = question.lowercased()
-        return lower.hasPrefix("what is") || lower.hasPrefix("what does") || lower.hasPrefix("why")
     }
 
     private func explanation(for request: InstructorRequest) -> String {

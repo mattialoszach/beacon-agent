@@ -35,12 +35,14 @@ struct GroundingResult: Equatable, Sendable {
 enum GroundingError: LocalizedError, Equatable {
     case invalidBounds
     case elementNotFound(String)
+    case markNotFound(Int)
     case noCandidate
 
     var errorDescription: String? {
         switch self {
         case .invalidBounds: "The model returned target bounds outside the screen."
         case let .elementNotFound(id): "The target element \(id) is no longer visible."
+        case let .markNotFound(mark): "The numbered target \(mark) is no longer visible."
         case .noCandidate: "No visible UI element matched the request."
         }
     }
@@ -100,6 +102,10 @@ struct HybridGrounder: GroundingStrategy {
     let visual = VisualGrounder()
 
     func resolve(intention: UIIntention, scene: ScreenScene) async throws -> GroundingResult {
+        if intention.preferredMark != nil {
+            return try await SetOfMarksGrounder(marks: SetOfMarksBuilder().build(scene: scene))
+                .resolve(intention: intention, scene: scene)
+        }
         do { return try await accessibility.resolve(intention: intention, scene: scene) }
         catch where intention.preferredBounds != nil {
             return try await visual.resolve(intention: intention, scene: scene)
@@ -180,7 +186,7 @@ enum VisualElementMatcher {
 
     static func bestMatch(for question: String, in elements: [VisualElementDescriptor]) -> Match? {
         return elements.compactMap { element -> Match? in
-            let relevance = SemanticElementMatcher.relevanceScore(query: question, candidate: element.text)
+            let relevance = SemanticElementMatcher.relevanceScore(query: question, candidate: element.bestLabel)
             guard relevance > 0, element.bounds.isValid else { return nil }
             return Match(element: element, score: min(0.95, relevance * 0.8 + element.confidence * 0.2))
         }.max { $0.score < $1.score }

@@ -13,7 +13,7 @@ The package targets macOS 14. Apple Foundation Models code is availability-gated
 
 ## Debugging grounding
 
-Developer Inspector is hidden from the sidebar by default. Enable **Show Developer Inspector** under **Models** to capture the active app, examine its normalized AX descriptors, and render every detected element. Move the inspected window between displays while the debug overlay is visible; labels and rectangles refresh twice per second.
+Developer Inspector is hidden from the sidebar by default. Enable **Show Developer Inspector** under **Models** to capture the active app, examine normalized Accessibility, OCR, rectangle, circle, icon, and freeform candidates, inspect intent confidence, and render detected accessible elements. Move the inspected window between displays while the debug overlay is visible; labels and rectangles refresh twice per second.
 
 When adding a grounding strategy:
 
@@ -25,7 +25,7 @@ When adding a grounding strategy:
 
 ## Test focus
 
-The current suite covers canonical coordinates, context budgeting, rectangle validation, AX/OCR selection, target validation, instructor transitions, outcome verification, sensitive-text classification, and display-scoped redaction. Add regression tests before changing coordinate conversion or model schemas.
+The current suite covers canonical coordinates, context budgeting, rectangle validation, Accessibility/local-vision/Set-of-Marks selection, request-mode classification, application recipes, target validation, instructor transitions, recovery limits, outcome verification, sensitive-text classification, provider image consent, and display-scoped redaction. Add regression tests before changing coordinate conversion or model schemas.
 
 ## Release checklist
 

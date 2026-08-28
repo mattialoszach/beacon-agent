@@ -15,9 +15,37 @@ struct PrivacyView: View {
         Form {
             Section("Processing") {
                 Toggle("Allow configured cloud providers", isOn: $controller.privacySettings.cloudProcessingEnabled)
+                Toggle(
+                    "Allow the redacted visual preview",
+                    isOn: $controller.privacySettings.cloudVisionEnabled
+                )
+                .disabled(!controller.privacySettings.cloudProcessingEnabled)
                 Text("Screenshots are redacted locally. Beacon's default accessibility matcher does not send any data off your Mac.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            if controller.privacySettings.cloudVisionEnabled {
+                Section("Exact outbound visual preview") {
+                    if let snapshot = controller.outboundImagePreview,
+                       let image = NSImage(data: snapshot.pngData) {
+                        Image(nsImage: image)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: .infinity, maxHeight: 220)
+                            .accessibilityLabel("Exact outbound redacted visual preview")
+                        Text("This locally redacted, numbered image was prepared for the latest OpenAI visual request. It is never used for excluded applications.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ContentUnavailableView(
+                            "No visual preview sent",
+                            systemImage: "eye.slash",
+                            description: Text("A preview appears here after a visual OpenAI request. The exact image is redacted before it becomes eligible to leave your Mac.")
+                        )
+                        .frame(minHeight: 150)
+                    }
+                }
             }
 
             Section("Never capture these applications") {

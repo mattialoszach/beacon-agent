@@ -3,6 +3,21 @@ import XCTest
 @testable import Beacon
 
 final class StepVerifierTests: XCTestCase {
+    func testSwitchingApplicationsDoesNotVerifyTheStep() {
+        let before = scene(title: "Document", labels: ["Export"], bundleIdentifier: "test.before")
+        let after = scene(title: "Other", labels: ["Done"], bundleIdentifier: "test.after")
+
+        let result = StepVerifier().verify(
+            expected: ExpectedOutcome(type: .visualChange, description: "The document changes"),
+            before: before,
+            after: after,
+            visualDifference: 1
+        )
+
+        XCTAssertFalse(result.succeeded)
+        XCTAssertTrue(result.explanation.contains("active application changed"))
+    }
+
     func testWindowAppearanceAcceptsNewDialogControls() {
         let before = scene(title: "Document", labels: ["File", "Edit"])
         let after = scene(title: "Export", labels: ["Cancel", "Export", "Format"])
@@ -19,10 +34,14 @@ final class StepVerifierTests: XCTestCase {
         XCTAssertFalse(StepVerifier().verify(expected: expected, before: before, after: after).succeeded)
     }
 
-    private func scene(title: String, labels: [String]) -> ScreenScene {
+    private func scene(
+        title: String,
+        labels: [String],
+        bundleIdentifier: String = "fixture"
+    ) -> ScreenScene {
         ScreenScene(
             timestamp: Date(),
-            activeApplication: .init(name: "Fixture", bundleIdentifier: "fixture", processIdentifier: 1),
+            activeApplication: .init(name: "Fixture", bundleIdentifier: bundleIdentifier, processIdentifier: 1),
             activeWindow: .init(title: title, bounds: nil),
             screenshot: nil,
             elements: labels.enumerated().map { index, label in

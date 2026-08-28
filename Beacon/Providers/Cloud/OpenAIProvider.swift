@@ -16,9 +16,12 @@ enum CloudProviderError: LocalizedError {
 
 struct OpenAIProvider: InstructorModel {
     let id = "OpenAI"
-    let capabilities: ModelCapabilities = [.text, .structuredOutput]
+    var capabilities: ModelCapabilities {
+        allowsVision ? [.text, .vision, .structuredOutput] : [.text, .structuredOutput]
+    }
     let model: String
     let apiKey: String
+    var allowsVision = false
     var session: URLSession = .shared
 
     func reason(request: InstructorRequest) async throws -> InstructorResponse {
@@ -46,22 +49,31 @@ struct OpenAIProvider: InstructorModel {
               let payload = json.data(using: .utf8) else { throw CloudProviderError.invalidResponse }
         let decoded = try JSONDecoder().decode(InstructorResponse.self, from: payload)
             .normalizingVisualTarget(in: request.scene)
-        _ = try decoded.action?.validated(in: request.scene)
+        _ = try decoded.action?.validated(in: request.scene, marks: request.setOfMarks)
         return decoded
     }
 
-    private func requestBody(for request: InstructorRequest) -> [String: Any] {
+    func requestBody(for request: InstructorRequest) -> [String: Any] {
         let context = ModelContextBuilder(maximumElements: 100, maximumCharacters: 12_000).build(for: request)
         let userPrompt = """
         Question: \(request.question)
         \(context.text)
         """
+        var userContent: [[String: Any]] = [["type": "input_text", "text": userPrompt]]
+        if allowsVision, let snapshot = request.visualContextImage {
+            userContent.append([
+                "type": "input_image",
+                "image_url": "data:image/png;base64,\(snapshot.pngData.base64EncodedString())",
+                "detail": "high"
+            ])
+        }
 
         return [
             "model": model,
+            "store": false,
             "input": [
-                ["role": "developer", "content": [["type": "input_text", "text": "You are Beacon, a macOS UI instructor. Select only supplied element IDs or listed visual bounds. Never invent coordinates. Give one short next step, account for completed steps, and mark taskComplete only when the overall task is done."]]],
-                ["role": "user", "content": [["type": "input_text", "text": userPrompt]]]
+                ["role": "developer", "content": [["type": "input_text", "text": "You are Beacon, a macOS UI instructor. Prefer supplied stable element IDs. If a numbered visual preview is present, use targetMark to select its exact badge for canvas, CAD, icon, or unlabeled targets. Otherwise use only listed visual bounds. Never invent an ID, mark, or coordinate. Give one short next step, account for completed steps, and mark taskComplete only when the overall task is done."]]],
+                ["role": "user", "content": userContent]
             ],
             "text": ["format": [
                 "type": "json_schema",
@@ -84,7 +96,7 @@ struct OpenAIProvider: InstructorModel {
                         ["type": "null"],
                         [
                             "type": "object", "additionalProperties": false,
-                            "required": ["type", "targetElementId", "targetBounds", "overlay"],
+                            "required": ["type", "targetElementId", "targetBounds", "targetMark", "overlay"],
                             "properties": [
                                 "type": ["type": "string", "enum": ["pointToElement", "explain", "complete"]],
                                 "targetElementId": ["anyOf": [["type": "string"], ["type": "null"]]],
@@ -101,6 +113,12 @@ struct OpenAIProvider: InstructorModel {
                                                 "height": ["type": "number", "minimum": 0, "maximum": 1]
                                             ]
                                         ]
+                                    ]
+                                ],
+                                "targetMark": [
+                                    "anyOf": [
+                                        ["type": "integer", "minimum": 1, "maximum": 80],
+                                        ["type": "null"]
                                     ]
                                 ],
                                 "overlay": ["type": "string", "enum": OverlayStyle.allCases.map(\.rawValue)]

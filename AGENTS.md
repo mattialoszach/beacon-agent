@@ -111,13 +111,14 @@ These are release-blocking requirements:
 - Capture only after explicit user interaction or while verifying a visible guide step.
 - Do not write screenshots or observation frames to disk.
 - Exclude Beacon and configured excluded applications through ScreenCaptureKit.
-- Keep screenshots local unless a future feature obtains explicit user consent and exposes the exact outbound image.
-- The current OpenAI provider is text-only; do not attach screenshots silently.
+- Keep screenshots local unless the separate redacted-preview consent is enabled and expose the exact outbound image under Privacy.
+- The OpenAI provider is text-only by default; do not attach screenshots silently or without the separate visual consent.
 - Remove password values during Accessibility extraction.
 - Redact secure fields and locally detected sensitive text before retaining a privacy-preview image.
 - Excluded applications must use a local provider and must not produce screenshots.
 - Store API keys in macOS Keychain, never UserDefaults, source files, logs, or fixtures.
 - Show the exact bounded outbound text in Developer Inspector.
+- Show the exact outbound visual preview in the normal Privacy screen whenever cloud vision is enabled.
 
 Temporary frame samples used for local change detection must remain in memory and must not be sent to any model.
 
@@ -131,7 +132,7 @@ All providers conform to `InstructorModel` and return typed `InstructorResponse`
 - Keep provider-specific request and response details inside the provider directory.
 - Do not hard-code secrets or assume cloud availability.
 - A local fallback must remain available when Apple Intelligence or cloud processing is unavailable.
-- Respect application exclusions and the `Local Only` processing mode.
+- Respect application exclusions and the cloud-processing consent boundary.
 
 Apple Foundation Models prompts must remain bounded and use native generated schemas. Keep the reduced-context retry for context-window failures.
 
@@ -186,4 +187,4 @@ Avoid making the normal test suite depend on network access, screen-recording pe
 
 Update `README.md` and relevant files under `Docs/` when behavior, privacy boundaries, permissions, provider data flow, or supported features change.
 
-Current non-goals include autonomous clicking, voice input, cross-platform support, plugin marketplaces, and workflow automation. Advanced CAD viewport understanding and non-text control-shape recognition are not yet implemented; do not describe them as working features.
+Current non-goals include autonomous clicking, voice input, cross-platform support, plugin marketplaces, and workflow automation. Local non-text control-shape recognition covers rectangles, circles, small icons, and freeform contours. Advanced CAD document semantics are not implemented; do not describe visible-shape grounding as access to an application's internal CAD model.

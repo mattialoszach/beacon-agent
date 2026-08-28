@@ -10,19 +10,21 @@ This repository contains the native v0.1 grounding prototype and verified multi-
 
 - Native SwiftUI/AppKit app with both a menu bar and normal window
 - Global Option + Space prompt positioned beside the pointer
-- One Ask Beacon entry point that infers whether to explain the screen or guide a task
+- One Ask Beacon entry point with local semantic, structural, and visible-scene intent classification
 - Focused-app Accessibility tree extraction with stable per-scene element IDs
 - One normalized, top-left coordinate space across Retina and multiple displays
 - Click-through rectangle, arrow, circle, and spotlight overlays
 - Overlay target tracking while windows move
 - Local deterministic semantic element matching
-- Local Vision OCR fallback for apps with incomplete Accessibility data
-- Numbered Set-of-Marks image generation and candidate mapping
+- Local Vision OCR plus rectangle, circle, icon, and freeform-shape detection
+- Automatic numbered Set-of-Marks generation, model selection, validation, and candidate mapping
 - Typed provider boundary, Apple Foundation Models adapter, and optional OpenAI adapter
 - Bounded model contexts with native structured Apple Foundation Models output
 - Verified multi-step guides with an eight-step safety limit
+- Accessibility-notification change detection with a bounded low-rate fallback
+- Tested recovery recipes for TextEdit, Preview, Finder, Safari, and System Settings
 - ScreenCaptureKit privacy preview with local password, email, phone, card, and API-key redaction
-- Per-application capture exclusions and cloud-processing opt-in
+- Per-application capture exclusions plus separate cloud-text and redacted-image opt-ins
 - Optional Developer Inspector and live “draw all elements” overlay, hidden by default
 
 Beacon never clicks UI controls in v0.1.
@@ -34,7 +36,7 @@ Beacon never clicks UI controls in v0.1.
 - Accessibility permission for UI grounding
 - Screen Recording permission for screenshots and the privacy preview (optional for accessibility-only grounding)
 
-Apple Foundation Models are compiled and offered on macOS 26+. The deterministic accessibility matcher remains the default and requires no model download or API key.
+Apple Foundation Models are compiled and offered on macOS 26+. The deterministic accessibility and local-vision matcher remains the default and requires no model download or API key. Optional OpenAI visual reasoning requires both cloud processing and the separate redacted-preview consent toggle; the exact numbered image is shown under **Privacy**.
 
 ## Build and run
 
@@ -44,7 +46,7 @@ chmod +x scripts/build-app.sh
 open .build/Beacon.app
 ```
 
-On first launch, open **Permissions** and grant Accessibility. Grant Screen Recording only if you want local screenshot context, OCR fallback, and the redacted preview.
+On first launch, open **Permissions** and grant Accessibility. Grant Screen Recording only if you want local screenshot context, OCR and control-shape grounding, and the redacted preview.
 
 For command-line development:
 
@@ -80,7 +82,9 @@ See [Architecture](Docs/ARCHITECTURE.md), [Privacy](Docs/PRIVACY.md), and [Devel
 
 ## Current boundary
 
-The v0.1 loop prioritizes accessibility grounding and uses OCR text regions as its visual fallback. More advanced control-shape detection, having a vision provider select directly from Set-of-Marks, AXObserver notifications, voice, and autonomous actions remain future milestones.
+The v0.1 loop prioritizes Accessibility IDs, then local OCR and control-shape candidates, then validated Set-of-Marks regions. With explicit visual-preview consent, OpenAI can select numbered targets from the locally redacted image. Domain-specific CAD object semantics can still vary by application; Beacon grounds visible geometry but does not inspect a document's internal CAD model.
+
+Voice and autonomous clicking, typing, or dragging remain non-goals. Beacon explains and points while the user stays in control.
 
 ## License
 

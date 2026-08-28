@@ -45,11 +45,49 @@ struct UIElementDescriptor: Identifiable, Codable, Equatable, Hashable, Sendable
     }
 }
 
+enum VisualElementKind: String, Codable, CaseIterable, Hashable, Sendable {
+    case text
+    case rectangle
+    case circle
+    case icon
+    case canvasShape
+
+    var displayName: String {
+        switch self {
+        case .text: "Text"
+        case .rectangle: "Rectangle"
+        case .circle: "Circle"
+        case .icon: "Icon"
+        case .canvasShape: "Canvas shape"
+        }
+    }
+}
+
 struct VisualElementDescriptor: Identifiable, Codable, Equatable, Hashable, Sendable {
     let id: String
     let text: String
     let bounds: NormalizedRect
     let confidence: Double
+    let kind: VisualElementKind
+
+    init(
+        id: String,
+        text: String,
+        bounds: NormalizedRect,
+        confidence: Double,
+        kind: VisualElementKind = .text
+    ) {
+        self.id = id
+        self.text = text
+        self.bounds = bounds
+        self.confidence = confidence
+        self.kind = kind
+    }
+
+    var bestLabel: String {
+        let label = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return label.isEmpty ? kind.displayName : label
+    }
 }
 
 struct ScreenScene: Codable, Equatable, Sendable {

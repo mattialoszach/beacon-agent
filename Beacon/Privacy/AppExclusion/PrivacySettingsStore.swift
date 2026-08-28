@@ -7,6 +7,9 @@ final class PrivacySettingsStore: ObservableObject {
     @Published var cloudProcessingEnabled: Bool {
         didSet { defaults.set(cloudProcessingEnabled, forKey: Keys.cloudProcessingEnabled) }
     }
+    @Published var cloudVisionEnabled: Bool {
+        didSet { defaults.set(cloudVisionEnabled, forKey: Keys.cloudVisionEnabled) }
+    }
 
     private let defaults: UserDefaults
 
@@ -14,6 +17,7 @@ final class PrivacySettingsStore: ObservableObject {
         self.defaults = defaults
         excludedBundleIdentifiers = Set(defaults.stringArray(forKey: Keys.excludedApps) ?? Self.sensibleDefaults)
         cloudProcessingEnabled = defaults.bool(forKey: Keys.cloudProcessingEnabled)
+        cloudVisionEnabled = defaults.bool(forKey: Keys.cloudVisionEnabled)
     }
 
     func isExcluded(bundleIdentifier: String?) -> Bool {
@@ -37,6 +41,7 @@ final class PrivacySettingsStore: ObservableObject {
     private enum Keys {
         static let excludedApps = "privacy.excludedBundleIdentifiers"
         static let cloudProcessingEnabled = "privacy.cloudProcessingEnabled"
+        static let cloudVisionEnabled = "privacy.cloudVisionEnabled"
     }
 
     private static let sensibleDefaults = [

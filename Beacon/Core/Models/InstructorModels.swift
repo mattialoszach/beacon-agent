@@ -19,13 +19,24 @@ struct SuggestedAction: Codable, Equatable, Sendable {
     let type: ActionType
     let targetElementId: String?
     let targetBounds: NormalizedRect?
+    var targetMark: Int? = nil
     let overlay: OverlayStyle
 
-    func validated(in scene: ScreenScene) throws -> SuggestedAction {
+    func validated(in scene: ScreenScene, marks: [SetOfMark] = []) throws -> SuggestedAction {
+        guard type == .pointToElement else { return self }
         if let id = targetElementId, !scene.elements.contains(where: { $0.id == id }) {
             throw GroundingError.elementNotFound(id)
         }
         if let bounds = targetBounds, !bounds.isValid { throw GroundingError.invalidBounds }
+        if let targetMark {
+            guard let mark = marks.first(where: { $0.id == targetMark }) else {
+                throw GroundingError.markNotFound(targetMark)
+            }
+            guard mark.bounds.isValid else { throw GroundingError.invalidBounds }
+        }
+        if targetElementId == nil, targetBounds == nil, targetMark == nil {
+            throw GroundingError.noCandidate
+        }
         return self
     }
 }
@@ -61,6 +72,7 @@ extension InstructorResponse {
                 type: action.type,
                 targetElementId: nil,
                 targetBounds: visual.bounds,
+                targetMark: action.targetMark,
                 overlay: action.overlay
             ),
             expectedOutcome: expectedOutcome,
@@ -74,6 +86,8 @@ struct InstructorRequest: Codable, Equatable, Sendable {
     let scene: ScreenScene
     let mode: InteractionMode
     var guideContext: GuideContext? = nil
+    var setOfMarks: [SetOfMark] = []
+    var visualContextImage: ScreenSnapshot? = nil
 }
 
 struct CompletedGuideStep: Codable, Equatable, Sendable {

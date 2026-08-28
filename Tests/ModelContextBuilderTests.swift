@@ -45,6 +45,31 @@ final class ModelContextBuilderTests: XCTestCase {
         XCTAssertTrue(context.text.contains("[redacted sensitive text]"))
     }
 
+    func testContextMapsValidatedMarksToTheirCandidates() {
+        let export = element(id: "e_export", label: "Export")
+        var request = InstructorRequest(
+            question: "Export this",
+            scene: scene(elements: [export]),
+            mode: .guide
+        )
+        request.setOfMarks = [
+            SetOfMark(
+                id: 4,
+                elementID: export.id,
+                visualElementID: nil,
+                bounds: export.bounds!,
+                label: export.bestLabel,
+                source: .accessibility,
+                visualKind: nil
+            )
+        ]
+
+        let context = ModelContextBuilder().build(for: request)
+
+        XCTAssertTrue(context.includedMarkIDs.contains(4))
+        XCTAssertTrue(context.text.contains("mark=4"))
+    }
+
     private func element(id: String, label: String) -> UIElementDescriptor {
         UIElementDescriptor(
             id: id, role: "AXButton", subrole: nil, label: label, title: nil,

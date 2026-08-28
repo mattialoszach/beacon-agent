@@ -2,7 +2,7 @@ import XCTest
 @testable import Beacon
 
 final class RequestModeClassifierTests: XCTestCase {
-    private let classifier = RequestModeClassifier()
+    private let classifier = RequestModeClassifier(semanticScorer: FixedSemanticScorer(ask: 0.5, guide: 0.5))
 
     func testExplanatoryRequestsAreQuestions() {
         XCTAssertEqual(classifier.classify("What does this warning mean?"), .ask)
@@ -14,5 +14,48 @@ final class RequestModeClassifierTests: XCTestCase {
         XCTAssertEqual(classifier.classify("Where is Export?"), .guide)
         XCTAssertEqual(classifier.classify("How do I export as PDF?"), .guide)
         XCTAssertEqual(classifier.classify("Export this as a PDF"), .guide)
+    }
+
+    func testExplanationWinsEvenWhenItNamesAnAction() {
+        XCTAssertEqual(classifier.classify("What does Export do?"), .ask)
+    }
+
+    func testVisibleSceneTargetResolvesAnOtherwiseAmbiguousRequest() {
+        let pdf = UIElementDescriptor(
+            id: "e_pdf", role: "AXButton", subrole: nil, label: "PDF", title: nil,
+            value: nil, enabled: true, focused: false,
+            bounds: .init(x: 0.2, y: 0.2, width: 0.1, height: 0.05)
+        )
+        let scene = ScreenScene(
+            timestamp: Date(),
+            activeApplication: .init(name: "Fixture", bundleIdentifier: "test", processIdentifier: 1),
+            activeWindow: nil,
+            screenshot: nil,
+            elements: [pdf],
+            displays: []
+        )
+
+        XCTAssertEqual(classifier.classify("PDF", scene: scene), .guide)
+    }
+
+    func testSemanticScorerHandlesRequestsWithoutKnownPhrases() {
+        let semanticClassifier = RequestModeClassifier(
+            semanticScorer: FixedSemanticScorer(ask: 0.05, guide: 0.95)
+        )
+
+        let result = semanticClassifier.classification(for: "Assist with the task in front of me")
+
+        XCTAssertEqual(result.mode, .guide)
+        XCTAssertGreaterThan(result.confidence, 0.6)
+        XCTAssertTrue(result.evidence.contains("semantic action match"))
+    }
+}
+
+private struct FixedSemanticScorer: RequestModeSemanticScoring {
+    let ask: Double
+    let guide: Double
+
+    func scores(for request: String) -> RequestModeSemanticScores? {
+        RequestModeSemanticScores(ask: ask, guide: guide)
     }
 }

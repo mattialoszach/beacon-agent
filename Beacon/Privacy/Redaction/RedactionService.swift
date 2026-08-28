@@ -48,17 +48,15 @@ struct RedactionService {
 
         context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
         context.setFillColor(CGColor(gray: 0.08, alpha: 1))
+        var drawnRegionCount = 0
         for region in applicable {
-            let x = (region.bounds.x - snapshot.displayBounds.x) / snapshot.displayBounds.width
-            let y = (region.bounds.y - snapshot.displayBounds.y) / snapshot.displayBounds.height
-            let width = region.bounds.width / snapshot.displayBounds.width
-            let height = region.bounds.height / snapshot.displayBounds.height
-            context.fill(CGRect(
-                x: x * Double(image.width),
-                y: (1 - y - height) * Double(image.height),
-                width: width * Double(image.width),
-                height: height * Double(image.height)
-            ))
+            guard let drawingRect = CoordinateSpaceMapper.bitmapDrawingRect(
+                from: region.bounds,
+                pixelSize: CGSize(width: image.width, height: image.height),
+                displayBounds: snapshot.displayBounds
+            ) else { continue }
+            context.fill(drawingRect)
+            drawnRegionCount += 1
         }
 
         guard let redactedImage = context.makeImage() else { throw ScreenCaptureError.encodingFailed }
@@ -69,7 +67,7 @@ struct RedactionService {
             pixelHeight: redactedImage.height,
             displayBounds: snapshot.displayBounds,
             pngData: try pngData(from: redactedImage),
-            redactionCount: snapshot.redactionCount + applicable.count
+            redactionCount: snapshot.redactionCount + drawnRegionCount
         )
     }
 

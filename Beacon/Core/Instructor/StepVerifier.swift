@@ -12,6 +12,12 @@ struct StepVerifier: Sendable {
         after: ScreenScene,
         visualDifference: Double? = nil
     ) -> StepVerification {
+        if before.activeApplication.bundleIdentifier != after.activeApplication.bundleIdentifier {
+            return StepVerification(
+                succeeded: false,
+                explanation: "The active application changed before Beacon could confirm the expected result."
+            )
+        }
         guard let expected else {
             return .init(succeeded: true, explanation: "The interface changed.")
         }

@@ -24,8 +24,9 @@ struct AppleFoundationModelProvider: InstructorModel {
     ) async throws -> InstructorResponse {
         let context = builder.build(for: request)
         let session = LanguageModelSession(instructions: """
-        You are Beacon, a concise macOS UI instructor. Choose only an element ID listed in the prompt.
-        Give exactly one next step. Never invent an element ID or coordinate. If the task is already done,
+        You are Beacon, a concise macOS UI instructor. Prefer an element ID listed in the prompt. You may
+        choose a listed mark number for a visual fallback. Give exactly one next step. Never invent an element
+        ID, mark, or coordinate. If the task is already done,
         choose complete. If no listed control is useful, choose explain and say what the user should reveal.
         """)
         let response = try await session.respond(
@@ -40,6 +41,10 @@ struct AppleFoundationModelProvider: InstructorModel {
            !context.includedVisualElementIDs.contains(targetID) {
             throw GroundingError.elementNotFound(targetID)
         }
+        let targetMark = payload.targetMark > 0 ? payload.targetMark : nil
+        if let targetMark, !context.includedMarkIDs.contains(targetMark) {
+            throw GroundingError.markNotFound(targetMark)
+        }
         let actionType = ActionType(rawValue: payload.actionType) ?? .explain
         let expectedType = ExpectedOutcomeType(rawValue: payload.expectedOutcomeType)
         let action: SuggestedAction? = actionType == .pointToElement
@@ -47,6 +52,7 @@ struct AppleFoundationModelProvider: InstructorModel {
                 type: .pointToElement,
                 targetElementId: targetID,
                 targetBounds: nil,
+                targetMark: targetMark,
                 overlay: OverlayStyle(rawValue: payload.overlay) ?? .spotlight
             )
             : nil
@@ -59,7 +65,7 @@ struct AppleFoundationModelProvider: InstructorModel {
             taskComplete: payload.taskComplete || actionType == .complete
         )
         let normalized = result.normalizingVisualTarget(in: request.scene)
-        _ = try normalized.action?.validated(in: request.scene)
+        _ = try normalized.action?.validated(in: request.scene, marks: request.setOfMarks)
         return normalized
     }
 }
@@ -75,6 +81,9 @@ private struct AppleInstructionPayload {
 
     @Guide(description: "An exact listed element ID, or the word none")
     let targetElementID: String
+
+    @Guide(description: "An exact listed mark number, or zero")
+    let targetMark: Int
 
     @Guide(description: "How Beacon should highlight the target", .anyOf(["arrow", "rectangle", "circle", "spotlight", "tooltip"]))
     let overlay: String
