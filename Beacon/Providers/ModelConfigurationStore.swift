@@ -9,22 +9,10 @@ enum ModelProviderChoice: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-enum ProcessingMode: String, CaseIterable, Identifiable {
-    case localOnly = "Local Only"
-    case privacyFirst = "Privacy First"
-    case balanced = "Balanced"
-    case bestQuality = "Best Quality"
-
-    var id: String { rawValue }
-}
-
 @MainActor
 final class ModelConfigurationStore: ObservableObject {
     @Published var provider: ModelProviderChoice {
         didSet { defaults.set(provider.rawValue, forKey: Keys.provider) }
-    }
-    @Published var processingMode: ProcessingMode {
-        didSet { defaults.set(processingMode.rawValue, forKey: Keys.processingMode) }
     }
     @Published var openAIModel: String {
         didSet { defaults.set(openAIModel, forKey: Keys.openAIModel) }
@@ -36,10 +24,18 @@ final class ModelConfigurationStore: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        provider = ModelProviderChoice(rawValue: defaults.string(forKey: Keys.provider) ?? "") ?? .accessibility
-        processingMode = ProcessingMode(rawValue: defaults.string(forKey: Keys.processingMode) ?? "") ?? .privacyFirst
+        let savedProvider = ModelProviderChoice(rawValue: defaults.string(forKey: Keys.provider) ?? "") ?? .accessibility
+        let usedLegacyLocalOnlyMode = defaults.string(forKey: Keys.legacyProcessingMode) == "Local Only"
+        provider = savedProvider == .openAI && usedLegacyLocalOnlyMode ? .accessibility : savedProvider
         openAIModel = defaults.string(forKey: Keys.openAIModel) ?? "gpt-5-mini"
         apiKey = keychain.read(account: "openai-api-key") ?? ""
+
+        // Processing modes other than Local Only never affected routing. Cloud consent is
+        // now represented by the single privacy setting, so remove the obsolete value.
+        defaults.removeObject(forKey: Keys.legacyProcessingMode)
+        if provider != savedProvider {
+            defaults.set(provider.rawValue, forKey: Keys.provider)
+        }
     }
 
     func saveAPIKey() throws {
@@ -48,7 +44,7 @@ final class ModelConfigurationStore: ObservableObject {
 
     private enum Keys {
         static let provider = "models.provider"
-        static let processingMode = "models.processingMode"
+        static let legacyProcessingMode = "models.processingMode"
         static let openAIModel = "models.openAIModel"
     }
 }

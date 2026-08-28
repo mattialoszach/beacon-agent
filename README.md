@@ -23,7 +23,7 @@ This repository contains the native v0.1 grounding prototype and verified multi-
 - Verified multi-step guides with an eight-step safety limit
 - ScreenCaptureKit privacy preview with local password, email, phone, card, and API-key redaction
 - Per-application capture exclusions and cloud-processing opt-in
-- Developer inspector and live “draw all elements” overlay
+- Optional Developer Inspector and live “draw all elements” overlay, hidden by default
 
 Beacon never clicks UI controls in v0.1.
 
@@ -60,7 +60,7 @@ Running the packaged app is recommended because macOS attaches privacy permissio
 1. Open a standard macOS application such as TextEdit or Preview.
 2. Press Option + Space and ask “Where is Print?” or “How do I export this?”
 3. Beacon infers the request type, selects an accessible candidate, and renders a native click-through overlay when guidance is needed.
-4. Open **Developer Inspector** to inspect exact IDs, bounds, the selected strategy, and the redacted image.
+4. Under **Models**, enable **Show Developer Inspector**, then open it to inspect exact IDs, bounds, the selected strategy, and the redacted image.
 5. Choose **Draw All Elements** to validate geometry live while moving the target window.
 
 ## Project map

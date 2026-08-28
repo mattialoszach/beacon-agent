@@ -16,7 +16,7 @@ struct BeaconMenuView: View {
             Divider()
 
             Toggle("Pause Screen Access", isOn: $controller.screenAccessPaused)
-            LabeledContent("Current Model", value: controller.modelSettings.provider.rawValue)
+            LabeledContent("Selected Model", value: controller.modelSettings.provider.rawValue)
             Label(
                 controller.privacySettings.cloudProcessingEnabled ? "Cloud allowed" : "Local processing",
                 systemImage: controller.privacySettings.cloudProcessingEnabled ? "cloud" : "lock.shield"

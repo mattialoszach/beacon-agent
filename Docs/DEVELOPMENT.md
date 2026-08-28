@@ -13,7 +13,7 @@ The package targets macOS 14. Apple Foundation Models code is availability-gated
 
 ## Debugging grounding
 
-Use Developer Inspector to capture the active app, examine its normalized AX descriptors, and render every detected element. Move the inspected window between displays while the debug overlay is visible; labels and rectangles refresh twice per second.
+Developer Inspector is hidden from the sidebar by default. Enable **Show Developer Inspector** under **Models** to capture the active app, examine its normalized AX descriptors, and render every detected element. Move the inspected window between displays while the debug overlay is visible; labels and rectangles refresh twice per second.
 
 When adding a grounding strategy:
 

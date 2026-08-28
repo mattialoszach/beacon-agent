@@ -16,7 +16,9 @@ Beacon's default path is local and accessibility-only. No account, API key, scre
 
 Cloud processing has a separate opt-in and is disabled by default. The current OpenAI adapter sends the user's question plus structured application, window, and accessible-control metadata. It does **not** attach the screenshot. API keys are kept in the macOS Keychain, not UserDefaults or repository files.
 
-The Developer Inspector displays the local redacted screenshot, reports hidden regions, and separately shows the exact bounded text context provided to the configured reasoning model. Because the current cloud adapter is text-only, the image does not leave the machine.
+The model screen exposes one provider choice instead of quality presets. Selecting OpenAI does not grant cloud access: the separate cloud-processing toggle remains the authoritative consent boundary, and Beacon falls back to its local Accessibility matcher while that toggle is off.
+
+The optional Developer Inspector is hidden by default. When enabled, it displays the local redacted screenshot, reports hidden regions, and separately shows the exact bounded text context provided to the configured reasoning model. Because the current cloud adapter is text-only, the image does not leave the machine.
 
 ## Known limits
 

@@ -5,11 +5,13 @@ import SwiftUI
 struct BeaconApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var controller = BeaconController()
+    @StateObject private var appPreferences = AppPreferencesStore()
 
     var body: some Scene {
         Window("Beacon", id: "main") {
             MainWindowView()
                 .environmentObject(controller)
+                .environmentObject(appPreferences)
                 .frame(minWidth: 900, minHeight: 620)
                 .task { controller.start() }
         }
@@ -26,6 +28,7 @@ struct BeaconApp: App {
         Settings {
             SettingsView()
                 .environmentObject(controller)
+                .environmentObject(appPreferences)
                 .frame(width: 620, height: 450)
         }
     }

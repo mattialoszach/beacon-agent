@@ -24,11 +24,16 @@ private enum AppSection: String, CaseIterable, Identifiable {
 
 struct MainWindowView: View {
     @EnvironmentObject private var controller: BeaconController
+    @EnvironmentObject private var appPreferences: AppPreferencesStore
     @State private var selection: AppSection? = .home
+
+    private var visibleSections: [AppSection] {
+        AppSection.allCases.filter { $0 != .inspector || appPreferences.showDeveloperInspector }
+    }
 
     var body: some View {
         NavigationSplitView {
-            List(AppSection.allCases, selection: $selection) { section in
+            List(visibleSections, selection: $selection) { section in
                 Label(section.rawValue, systemImage: section.icon).tag(section)
             }
             .navigationTitle("Beacon")
@@ -55,6 +60,11 @@ struct MainWindowView: View {
             Button("OK") { controller.dismissError() }
         } message: {
             Text(controller.errorMessage ?? "Unknown error")
+        }
+        .onChange(of: appPreferences.showDeveloperInspector) { _, isVisible in
+            if !isVisible, selection == .inspector {
+                selection = .home
+            }
         }
     }
 }
@@ -188,6 +198,7 @@ private struct HistoryView: View {
 
 struct SettingsView: View {
     @EnvironmentObject private var controller: BeaconController
+    @EnvironmentObject private var appPreferences: AppPreferencesStore
 
     var body: some View {
         TabView {
@@ -196,6 +207,7 @@ struct SettingsView: View {
             PermissionsView().tabItem { Label("Permissions", systemImage: "checkmark.shield") }
         }
         .environmentObject(controller)
+        .environmentObject(appPreferences)
         .padding()
     }
 }

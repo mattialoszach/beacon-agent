@@ -38,7 +38,7 @@ struct AccessibilityHeuristicProvider: InstructorModel {
             return InstructorResponse(
                 message: request.guideContext?.completedSteps.isEmpty == false
                     ? "The previous steps are complete and I don't see another matching control. The task may be finished."
-                    : "I couldn't confidently match that request to an accessible or visible control. Open Developer Inspector to see what this app exposes.",
+                    : "I couldn't confidently match that request to an accessible or visible control. Try naming the control or action more specifically.",
                 action: nil,
                 expectedOutcome: nil,
                 taskComplete: request.guideContext?.completedSteps.isEmpty == false

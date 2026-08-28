@@ -205,8 +205,7 @@ final class BeaconController: ObservableObject {
         case .accessibility:
             return AccessibilityHeuristicProvider()
         case .openAI:
-            guard privacySettings.cloudProcessingEnabled,
-                  modelSettings.processingMode != .localOnly else {
+            guard privacySettings.cloudProcessingEnabled else {
                 return AccessibilityHeuristicProvider()
             }
             return OpenAIProvider(
