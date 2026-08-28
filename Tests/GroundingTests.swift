@@ -35,6 +35,31 @@ final class GroundingTests: XCTestCase {
         XCTAssertThrowsError(try action.validated(in: scene(elements: [])))
     }
 
+    func testVisualMatcherFindsOCRLabel() throws {
+        let elements = [
+            VisualElementDescriptor(
+                id: "v_export", text: "Export", bounds: .init(x: 0.6, y: 0.2, width: 0.1, height: 0.04), confidence: 0.96
+            ),
+            VisualElementDescriptor(
+                id: "v_cancel", text: "Cancel", bounds: .init(x: 0.4, y: 0.2, width: 0.1, height: 0.04), confidence: 0.99
+            )
+        ]
+        let match = try XCTUnwrap(VisualElementMatcher.bestMatch(for: "Where is export?", in: elements))
+        XCTAssertEqual(match.element.id, "v_export")
+    }
+
+    func testExactPDFMatchBeatsSaveSynonym() throws {
+        let elements = [
+            element(id: "e_save", label: "Save"),
+            element(id: "e_pdf", label: "PDF")
+        ]
+        let match = try XCTUnwrap(SemanticElementMatcher.bestMatch(
+            for: "Export this as PDF",
+            in: elements
+        ))
+        XCTAssertEqual(match.element.id, "e_pdf")
+    }
+
     private func element(id: String, label: String) -> UIElementDescriptor {
         UIElementDescriptor(
             id: id, role: "AXButton", subrole: nil, label: label, title: nil,

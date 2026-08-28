@@ -4,6 +4,7 @@ struct UIIntention: Codable, Equatable, Sendable {
     let question: String
     let preferredElementID: String?
     let preferredBounds: NormalizedRect?
+    var preferredMark: Int? = nil
 }
 
 enum GroundedTarget: Codable, Equatable, Sendable {
@@ -127,19 +128,15 @@ enum SemanticElementMatcher {
     ]
 
     static func bestMatch(for question: String, in elements: [UIElementDescriptor]) -> Match? {
-        let queryTokens = expandedTokens(question)
-        guard !queryTokens.isEmpty else { return nil }
+        guard !rawTokens(question).isEmpty else { return nil }
 
         return elements.compactMap { element -> Match? in
             guard element.enabled, element.bounds?.isValid == true else { return nil }
             let candidate = [element.label, element.title, element.value, element.role]
                 .compactMap { $0 }
                 .joined(separator: " ")
-            let candidateTokens = expandedTokens(candidate)
-            let overlap = queryTokens.intersection(candidateTokens)
-            guard !overlap.isEmpty else { return nil }
-            let exactPhrase = candidate.lowercased().contains(question.lowercased()) ? 0.25 : 0
-            let score = min(1, Double(overlap.count) / Double(max(1, queryTokens.count)) + exactPhrase + 0.35)
+            let score = relevanceScore(query: question, candidate: candidate)
+            guard score > 0 else { return nil }
             return Match(element: element, score: score)
         }
         .max { lhs, rhs in
@@ -149,11 +146,43 @@ enum SemanticElementMatcher {
         }
     }
 
-    private static func expandedTokens(_ text: String) -> Set<String> {
-        let raw = Set(text.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init))
-            .subtracting(stopWords)
+    static func expandedTokens(_ text: String) -> Set<String> {
+        let raw = rawTokens(text)
         return raw.reduce(into: raw) { result, token in
             for group in synonyms.values where group.contains(token) { result.formUnion(group) }
         }
+    }
+
+    static func relevanceScore(query: String, candidate: String) -> Double {
+        let queryRaw = rawTokens(query)
+        let candidateRaw = rawTokens(candidate)
+        guard !queryRaw.isEmpty, !candidateRaw.isEmpty else { return 0 }
+        let exact = queryRaw.intersection(candidateRaw)
+        let semantic = expandedTokens(query).intersection(expandedTokens(candidate))
+        guard !semantic.isEmpty else { return 0 }
+        let exactCoverage = Double(exact.count) / Double(queryRaw.count)
+        let semanticCoverage = Double(semantic.count) / Double(max(1, expandedTokens(query).count))
+        let exactPhrase = candidate.lowercased().contains(query.lowercased()) ? 0.1 : 0
+        return min(1, 0.3 + exactCoverage * 0.55 + semanticCoverage * 0.2 + exactPhrase)
+    }
+
+    private static func rawTokens(_ text: String) -> Set<String> {
+        Set(text.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init))
+            .subtracting(stopWords)
+    }
+}
+
+enum VisualElementMatcher {
+    struct Match: Equatable {
+        let element: VisualElementDescriptor
+        let score: Double
+    }
+
+    static func bestMatch(for question: String, in elements: [VisualElementDescriptor]) -> Match? {
+        return elements.compactMap { element -> Match? in
+            let relevance = SemanticElementMatcher.relevanceScore(query: question, candidate: element.text)
+            guard relevance > 0, element.bounds.isValid else { return nil }
+            return Match(element: element, score: min(0.95, relevance * 0.8 + element.confidence * 0.2))
+        }.max { $0.score < $1.score }
     }
 }

@@ -33,6 +33,8 @@ Overlay windows are one transparent, click-through `NSPanel` per `NSScreen`. Eac
 
 `ScreenCaptureService` uses ScreenCaptureKit and captures a single relevant display only after explicit interaction. Screenshots are optional. Accessibility-only guidance remains available when Screen Recording is denied.
 
+`VisionSceneAnalyzer` runs Apple's Vision OCR locally and turns recognized text into normalized visual candidates. Sensitive text candidates are removed before model context is created. The image is redacted before it becomes the privacy preview.
+
 ## Grounding
 
 Models select stable element IDs whenever possible. `AccessibilityGrounder` resolves those IDs to locally known bounds. `VisualGrounder` accepts only validated normalized bounding boxes. `HybridGrounder` prefers Accessibility and preserves the visual fallback boundary without coupling either path to a provider.
@@ -41,14 +43,14 @@ The overlay accepts only `GroundedTarget`, so it cannot tell whether a target ca
 
 ## Instructor lifecycle
 
-`InstructorStateMachine` makes the single-step lifecycle explicit:
+`InstructorStateMachine` makes each guide step explicit:
 
 ```text
 idle → capturingScene → understanding → grounding → presenting
      → waitingForChange → verifying → completed
 ```
 
-Cancellation returns any state to idle. Invalid transitions throw. Observation polls lightweight Accessibility fingerprints only while a guide expects change; it does not continuously upload or capture frames.
+Cancellation returns any state to idle. Invalid transitions throw. Observation polls lightweight Accessibility fingerprints only while a guide expects change and samples a small local frame difference when AX exposes no change. It never uploads observation frames. Successful verification advances the same guide with completed-step context, up to an eight-step safety limit.
 
 ## Providers
 
@@ -58,12 +60,12 @@ Cancellation returns any state to idle. Invalid transitions throw. Observation p
 - `AppleFoundationModelProvider`: local language reasoning on supported systems;
 - `OpenAIProvider`: optional structured output over the Responses API.
 
-All model actions are decoded into `InstructorResponse` and validated against the current scene before rendering. Unknown IDs and out-of-range rectangles are rejected.
+`ModelContextBuilder` ranks focused, semantically relevant, actionable controls and enforces strict element and character budgets. This prevents large browser or IDE accessibility trees from overflowing local context windows. Apple output uses a native `@Generable` schema and retries once with a smaller context budget. All model actions are validated against the current scene before rendering. Unknown IDs and out-of-range rectangles are rejected.
 
 ## Next milestones
 
-1. Annotated Set-of-Marks capture and mapping table.
-2. Vision candidate detection and OCR redaction.
-3. AXObserver-driven change events plus local perceptual frame differencing.
-4. Multi-step plan memory and expected-outcome-specific verification.
+1. Vision-driven selection from the existing Set-of-Marks capture and mapping table.
+2. Control-shape detection beyond OCR text bounds.
+3. AXObserver-driven notifications to reduce the current low-rate polling.
+4. Application-specific task fixtures and recovery policies.
 5. Signed release packaging and a documented threat model review.

@@ -45,11 +45,45 @@ struct UIElementDescriptor: Identifiable, Codable, Equatable, Hashable, Sendable
     }
 }
 
+struct VisualElementDescriptor: Identifiable, Codable, Equatable, Hashable, Sendable {
+    let id: String
+    let text: String
+    let bounds: NormalizedRect
+    let confidence: Double
+}
+
 struct ScreenScene: Codable, Equatable, Sendable {
     let timestamp: Date
     let activeApplication: ApplicationDescriptor
     let activeWindow: WindowDescriptor?
     let screenshot: ScreenSnapshot?
     let elements: [UIElementDescriptor]
+    var visualElements: [VisualElementDescriptor] = []
     let displays: [DisplayDescriptor]
+}
+
+extension ScreenScene {
+    func replacingScreenshot(with snapshot: ScreenSnapshot?) -> ScreenScene {
+        ScreenScene(
+            timestamp: timestamp,
+            activeApplication: activeApplication,
+            activeWindow: activeWindow,
+            screenshot: snapshot,
+            elements: elements,
+            visualElements: visualElements,
+            displays: displays
+        )
+    }
+
+    func replacingVisualElements(with visualElements: [VisualElementDescriptor]) -> ScreenScene {
+        ScreenScene(
+            timestamp: timestamp,
+            activeApplication: activeApplication,
+            activeWindow: activeWindow,
+            screenshot: screenshot,
+            elements: elements,
+            visualElements: visualElements,
+            displays: displays
+        )
+    }
 }

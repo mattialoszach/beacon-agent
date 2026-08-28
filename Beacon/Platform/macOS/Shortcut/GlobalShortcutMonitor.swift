@@ -8,13 +8,14 @@ final class GlobalShortcutMonitor {
 
     deinit { unregister() }
 
-    func registerOptionSpace(action: @escaping () -> Void) {
+    @discardableResult
+    func registerOptionSpace(action: @escaping () -> Void) -> Bool {
         unregister()
         self.action = action
 
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
         let pointer = Unmanaged.passUnretained(self).toOpaque()
-        InstallEventHandler(
+        let handlerStatus = InstallEventHandler(
             GetApplicationEventTarget(),
             { _, event, userData in
                 guard let event, let userData else { return OSStatus(eventNotHandledErr) }
@@ -38,9 +39,13 @@ final class GlobalShortcutMonitor {
             pointer,
             &handlerRef
         )
+        guard handlerStatus == noErr else {
+            unregister()
+            return false
+        }
 
         let hotKeyID = EventHotKeyID(signature: Self.signature, id: 1)
-        RegisterEventHotKey(
+        let hotKeyStatus = RegisterEventHotKey(
             UInt32(kVK_Space),
             UInt32(optionKey),
             hotKeyID,
@@ -48,6 +53,11 @@ final class GlobalShortcutMonitor {
             0,
             &hotKeyRef
         )
+        guard hotKeyStatus == noErr else {
+            unregister()
+            return false
+        }
+        return true
     }
 
     func unregister() {

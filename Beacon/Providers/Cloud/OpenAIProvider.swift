@@ -45,26 +45,22 @@ struct OpenAIProvider: InstructorModel {
             .first(where: { $0.type == "output_text" })?.text,
               let payload = json.data(using: .utf8) else { throw CloudProviderError.invalidResponse }
         let decoded = try JSONDecoder().decode(InstructorResponse.self, from: payload)
+            .normalizingVisualTarget(in: request.scene)
         _ = try decoded.action?.validated(in: request.scene)
         return decoded
     }
 
     private func requestBody(for request: InstructorRequest) -> [String: Any] {
-        let controls = request.scene.elements.map {
-            "[\($0.id)] \($0.role ?? "UIElement") \"\($0.bestLabel)\" bounds=\($0.bounds.map(String.init(describing:)) ?? "none")"
-        }.joined(separator: "\n")
+        let context = ModelContextBuilder(maximumElements: 100, maximumCharacters: 12_000).build(for: request)
         let userPrompt = """
         Question: \(request.question)
-        Mode: \(request.mode.rawValue)
-        Application: \(request.scene.activeApplication.name)
-        Window: \(request.scene.activeWindow?.title ?? "Unknown")
-        Visible accessible controls:\n\(controls)
+        \(context.text)
         """
 
         return [
             "model": model,
             "input": [
-                ["role": "developer", "content": [["type": "input_text", "text": "You are Beacon, a macOS UI instructor. Select only supplied element IDs. Never invent coordinates. Give one short next step."]]],
+                ["role": "developer", "content": [["type": "input_text", "text": "You are Beacon, a macOS UI instructor. Select only supplied element IDs or listed visual bounds. Never invent coordinates. Give one short next step, account for completed steps, and mark taskComplete only when the overall task is done."]]],
                 ["role": "user", "content": [["type": "input_text", "text": userPrompt]]]
             ],
             "text": ["format": [
@@ -80,7 +76,7 @@ struct OpenAIProvider: InstructorModel {
         [
             "type": "object",
             "additionalProperties": false,
-            "required": ["message", "action", "expectedOutcome"],
+            "required": ["message", "action", "expectedOutcome", "taskComplete"],
             "properties": [
                 "message": ["type": "string"],
                 "action": [
@@ -124,7 +120,8 @@ struct OpenAIProvider: InstructorModel {
                             ]
                         ]
                     ]
-                ]
+                ],
+                "taskComplete": ["type": "boolean"]
             ]
         ]
     }

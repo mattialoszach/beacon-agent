@@ -28,9 +28,12 @@ struct AccessibilityService {
         return AXIsProcessTrustedWithOptions(options)
     }
 
-    func captureScene(includeScreenshot: ScreenSnapshot? = nil) throws -> ScreenScene {
+    func captureScene(
+        for requestedApplication: NSRunningApplication? = nil,
+        includeScreenshot: ScreenSnapshot? = nil
+    ) throws -> ScreenScene {
         guard isTrusted() else { throw AccessibilityCaptureError.permissionDenied }
-        guard let app = NSWorkspace.shared.frontmostApplication else {
+        guard let app = requestedApplication ?? NSWorkspace.shared.frontmostApplication else {
             throw AccessibilityCaptureError.noFrontmostApplication
         }
 
@@ -88,7 +91,9 @@ struct AccessibilityService {
         if isInteractive, !hidden {
             let rawBounds = rect(of: element)
             let normalizedBounds = rawBounds.flatMap(mapper.normalizeAXRect)
-            if normalizedBounds != nil {
+            if let normalizedBounds,
+               normalizedBounds.width > 0.000_1,
+               normalizedBounds.height > 0.000_1 {
                 output.append(UIElementDescriptor(
                     id: stableID(path: path, role: role, element: element),
                     role: role,

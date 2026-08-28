@@ -40,4 +40,30 @@ final class ModelResponseParsingTests: XCTestCase {
             XCTAssertEqual(error as? GroundingError, .invalidBounds)
         }
     }
+
+    func testVisualElementIDNormalizesToValidatedBounds() throws {
+        let visual = VisualElementDescriptor(
+            id: "v_export", text: "Export",
+            bounds: .init(x: 0.7, y: 0.2, width: 0.1, height: 0.04),
+            confidence: 0.95
+        )
+        var scene = ScreenScene(
+            timestamp: Date(),
+            activeApplication: .init(name: "Test", bundleIdentifier: nil, processIdentifier: 1),
+            activeWindow: nil,
+            screenshot: nil,
+            elements: [],
+            displays: []
+        )
+        scene.visualElements = [visual]
+        let response = InstructorResponse(
+            message: "Select Export",
+            action: .init(type: .pointToElement, targetElementId: "v_export", targetBounds: nil, overlay: .rectangle),
+            expectedOutcome: nil
+        ).normalizingVisualTarget(in: scene)
+
+        XCTAssertNil(response.action?.targetElementId)
+        XCTAssertEqual(response.action?.targetBounds, visual.bounds)
+        XCTAssertNoThrow(try response.action?.validated(in: scene))
+    }
 }

@@ -17,13 +17,25 @@ enum ScreenCaptureError: LocalizedError {
 }
 
 struct ScreenCaptureService {
-    func captureDisplay(containing point: CGPoint? = nil) async throws -> ScreenSnapshot {
+    func captureDisplay(
+        containing point: CGPoint? = nil,
+        excludingBundleIdentifiers: Set<String> = []
+    ) async throws -> ScreenSnapshot {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         guard let display = chooseDisplay(from: content.displays, point: point) else {
             throw ScreenCaptureError.noDisplay
         }
 
-        let filter = SCContentFilter(display: display, excludingWindows: [])
+        let ownBundleID = Bundle.main.bundleIdentifier
+        let excludedApplications = content.applications.filter { application in
+            excludingBundleIdentifiers.contains(application.bundleIdentifier)
+                || application.bundleIdentifier == ownBundleID
+        }
+        let filter = SCContentFilter(
+            display: display,
+            excludingApplications: excludedApplications,
+            exceptingWindows: []
+        )
         let configuration = SCStreamConfiguration()
         configuration.width = display.width
         configuration.height = display.height
@@ -45,7 +57,9 @@ struct ScreenCaptureService {
             pixelHeight: image.height,
             displayBounds: displayBounds,
             pngData: try pngData(from: image),
-            redactionCount: 0
+            redactionCount: excludedApplications.filter {
+                excludingBundleIdentifiers.contains($0.bundleIdentifier)
+            }.count
         )
     }
 

@@ -25,7 +25,7 @@ When adding a grounding strategy:
 
 ## Test focus
 
-The current suite covers canonical coordinates, rectangle validation, semantic selection, target validation, instructor transitions, and display-scoped redaction. Add regression tests before changing coordinate conversion or model schemas.
+The current suite covers canonical coordinates, context budgeting, rectangle validation, AX/OCR selection, target validation, instructor transitions, outcome verification, sensitive-text classification, and display-scoped redaction. Add regression tests before changing coordinate conversion or model schemas.
 
 ## Release checklist
 

@@ -24,6 +24,8 @@ final class BeaconController: ObservableObject {
     @Published private(set) var groundingStrategy = "—"
     @Published private(set) var groundingConfidence: Double?
     @Published private(set) var rawModelResponse = ""
+    @Published private(set) var modelContextPreview = ""
+    @Published private(set) var setOfMarksPreview: MarkedScreenScene?
     @Published private(set) var history: [GuideHistoryItem] = []
     @Published private(set) var errorMessage: String?
     @Published private(set) var statusMessage = "Ready — press Option + Space"
@@ -35,6 +37,9 @@ final class BeaconController: ObservableObject {
     private let accessibility = AccessibilityService()
     private let screenCapture = ScreenCaptureService()
     private let redactor = RedactionService()
+    private let visionAnalyzer = VisionSceneAnalyzer()
+    private let sensitiveTextDetector = SensitiveTextDetector()
+    private let setOfMarksRenderer = SetOfMarksRenderer()
     private let grounder: any GroundingStrategy = HybridGrounder()
     private let shortcut = GlobalShortcutMonitor()
     private let prompt = FloatingPromptController()
@@ -43,7 +48,9 @@ final class BeaconController: ObservableObject {
     private var preparedScene: ScreenScene?
     private var observationTask: Task<Void, Never>?
     private var debugObservationTask: Task<Void, Never>?
+    private var activeGuide: ActiveGuide?
     private var settingsCancellables = Set<AnyCancellable>()
+    private var lastExternalApplication: NSRunningApplication?
     private var started = false
 
     var isObserving: Bool { [.capturingScene, .understanding, .grounding, .waitingForChange, .verifying].contains(state) }
@@ -55,12 +62,22 @@ final class BeaconController: ObservableObject {
         modelSettings.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &settingsCancellables)
+        if let frontmost = NSWorkspace.shared.frontmostApplication,
+           frontmost.bundleIdentifier != Bundle.main.bundleIdentifier {
+            lastExternalApplication = frontmost
+        }
+        NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didActivateApplicationNotification)
+            .compactMap { $0.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication }
+            .filter { $0.bundleIdentifier != Bundle.main.bundleIdentifier }
+            .sink { [weak self] application in self?.lastExternalApplication = application }
+            .store(in: &settingsCancellables)
     }
 
     func start() {
         guard !started else { return }
         started = true
-        shortcut.registerOptionSpace { [weak self] in self?.showPrompt(mode: .guide) }
+        let registered = shortcut.registerOptionSpace { [weak self] in self?.showPrompt(mode: .guide) }
+        if !registered { statusMessage = "Option + Space is already used by another app" }
         overlay.onDismiss = { [weak self] in self?.cancel() }
     }
 
@@ -71,7 +88,7 @@ final class BeaconController: ObservableObject {
         }
         errorMessage = nil
         do {
-            preparedScene = try accessibility.captureScene()
+            preparedScene = try captureTargetScene()
         } catch {
             preparedScene = nil
             errorMessage = error.localizedDescription
@@ -89,10 +106,11 @@ final class BeaconController: ObservableObject {
         cancel(resetMessage: false)
         currentQuestion = question
         errorMessage = nil
+        activeGuide = mode == .guide ? ActiveGuide(question: question) : nil
         do {
             try transition(.questionReceived)
             statusMessage = "Reading the current interface…"
-            var scene = try preparedScene ?? accessibility.captureScene()
+            var scene = try preparedScene ?? captureTargetScene()
             preparedScene = nil
 
             if privacySettings.isExcluded(bundleIdentifier: scene.activeApplication.bundleIdentifier) {
@@ -101,51 +119,14 @@ final class BeaconController: ObservableObject {
                 do {
                     let point = scene.activeWindow?.bounds
                         .flatMap(DisplayGeometryProvider().currentMapper().axRect(from:))?.center
-                    let snapshot = try await screenCapture.captureDisplay(containing: point)
-                    let regions = redactor.automaticRegions(in: scene)
-                    let safeSnapshot = try redactor.redact(snapshot: snapshot, regions: regions)
-                    scene = scene.replacingScreenshot(with: safeSnapshot)
+                    scene = try await addingVisualContext(to: scene, point: point)
                 } catch {
                     statusMessage = "Continuing without a screenshot: \(error.localizedDescription)"
                 }
             }
             currentScene = scene
             try transition(.sceneCaptured)
-
-            let request = InstructorRequest(question: question, scene: scene, mode: mode)
-            let model = try selectedModel(for: request)
-            statusMessage = "Reasoning with \(model.id)…"
-            let response = try await model.reason(request: request)
-            _ = try response.action?.validated(in: scene)
-            currentResponse = response
-            rawModelResponse = encodeForInspection(response)
-            try transition(.responseGenerated(needsTarget: response.action?.type == .pointToElement))
-
-            if let action = response.action, action.type == .pointToElement {
-                let result = try await grounder.resolve(
-                    intention: UIIntention(
-                        question: question,
-                        preferredElementID: action.targetElementId,
-                        preferredBounds: action.targetBounds
-                    ),
-                    scene: scene
-                )
-                selectedTarget = result.target
-                groundingStrategy = result.strategy
-                groundingConfidence = result.confidence
-                try transition(.targetGrounded)
-                overlay.showInstruction(VisualInstruction(
-                    text: response.message,
-                    explanation: nil,
-                    target: result.target,
-                    overlay: action.overlay
-                ))
-            }
-
-            try transition(.instructionPresented(expectsChange: response.expectedOutcome != nil && response.action != nil))
-            statusMessage = state == .waitingForChange ? "Waiting for the interface to change…" : "Answered"
-            appendHistory(question: question, response: response, scene: scene, succeeded: state == .completed ? true : nil)
-            if state == .waitingForChange { beginObservation(from: scene) }
+            try await generateAndPresent(question: question, mode: mode, scene: scene)
         } catch {
             fail(with: error)
         }
@@ -153,15 +134,22 @@ final class BeaconController: ObservableObject {
 
     func refreshInspector() async {
         do {
-            var scene = try accessibility.captureScene()
+            var scene = try captureTargetScene()
             if !privacySettings.isExcluded(bundleIdentifier: scene.activeApplication.bundleIdentifier),
                CGPreflightScreenCaptureAccess() {
-                let snapshot = try await screenCapture.captureDisplay()
-                let safe = try redactor.redact(snapshot: snapshot, regions: redactor.automaticRegions(in: scene))
-                scene = scene.replacingScreenshot(with: safe)
+                scene = try await addingVisualContext(to: scene, point: nil)
             }
             currentScene = scene
-            statusMessage = "Inspector refreshed: \(scene.elements.count) interactive elements"
+            setOfMarksPreview = try? setOfMarksRenderer.render(scene: scene)
+            statusMessage = "Inspector refreshed: \(scene.elements.count) AX + \(scene.visualElements.count) visual elements"
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    func rebuildSetOfMarksPreview() {
+        guard let scene = currentScene else { return }
+        do {
+            setOfMarksPreview = try setOfMarksRenderer.render(scene: scene)
+            statusMessage = "Set of Marks ready: \(setOfMarksPreview?.marks.count ?? 0) candidates"
         } catch { errorMessage = error.localizedDescription }
     }
 
@@ -173,7 +161,7 @@ final class BeaconController: ObservableObject {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(500))
                 guard let self, !Task.isCancelled else { return }
-                guard let scene = try? self.accessibility.captureScene() else { continue }
+                guard let scene = try? self.captureTargetScene() else { continue }
                 self.currentScene = scene
                 self.overlay.updateDebugElements(scene.elements)
             }
@@ -195,11 +183,16 @@ final class BeaconController: ObservableObject {
         prompt.close()
         try? transition(.cancel)
         selectedTarget = nil
+        activeGuide = nil
         if resetMessage { statusMessage = "Ready — press Option + Space" }
     }
 
     func requestPermission(_ permission: PermissionKind) {
         PermissionCenter().request(permission)
+    }
+
+    func dismissError() {
+        errorMessage = nil
     }
 
     private func selectedModel(for request: InstructorRequest) throws -> any InstructorModel {
@@ -228,17 +221,114 @@ final class BeaconController: ObservableObject {
         }
     }
 
+    private func captureTargetScene() throws -> ScreenScene {
+        let frontmost = NSWorkspace.shared.frontmostApplication
+        if let frontmost, frontmost.bundleIdentifier != Bundle.main.bundleIdentifier {
+            lastExternalApplication = frontmost
+            return try accessibility.captureScene(for: frontmost)
+        }
+        return try accessibility.captureScene(for: lastExternalApplication)
+    }
+
+    private func generateAndPresent(
+        question: String,
+        mode: InteractionMode,
+        scene: ScreenScene
+    ) async throws {
+        var request = InstructorRequest(question: question, scene: scene, mode: mode)
+        request.guideContext = activeGuide?.context
+        let model = try selectedModel(for: request)
+        let contextBuilder = model.id == "OpenAI"
+            ? ModelContextBuilder(maximumElements: 100, maximumCharacters: 12_000)
+            : ModelContextBuilder()
+        let modelContext = contextBuilder.build(for: request)
+        modelContextPreview = "Question: \(question)\n\(modelContext.text)"
+        let step = activeGuide.map { " step \($0.completedSteps.count + 1)" } ?? ""
+        statusMessage = "Reasoning with \(model.id) for\(step)…"
+        let modelResponse = try await model.reason(request: request)
+        let response: InstructorResponse
+        if mode == .guide, modelResponse.action?.type == .pointToElement,
+           modelResponse.expectedOutcome == nil {
+            response = InstructorResponse(
+                message: modelResponse.message,
+                action: modelResponse.action,
+                expectedOutcome: ExpectedOutcome(
+                    type: .visualChange,
+                    description: "The interface should change after this step."
+                ),
+                taskComplete: modelResponse.taskComplete
+            )
+        } else {
+            response = modelResponse
+        }
+        _ = try response.action?.validated(in: scene)
+        currentResponse = response
+        rawModelResponse = encodeForInspection(response)
+        try transition(.responseGenerated(needsTarget: response.action?.type == .pointToElement))
+
+        if let action = response.action, action.type == .pointToElement {
+            let result = try await grounder.resolve(
+                intention: UIIntention(
+                    question: question,
+                    preferredElementID: action.targetElementId,
+                    preferredBounds: action.targetBounds
+                ),
+                scene: scene
+            )
+            selectedTarget = result.target
+            groundingStrategy = result.strategy
+            groundingConfidence = result.confidence
+            try transition(.targetGrounded)
+            overlay.showInstruction(VisualInstruction(
+                text: response.message,
+                explanation: nil,
+                target: result.target,
+                overlay: action.overlay
+            ))
+        }
+
+        let expectsChange = response.expectedOutcome != nil && response.action != nil
+        try transition(.instructionPresented(expectsChange: expectsChange))
+        appendHistory(
+            question: question,
+            response: response,
+            scene: scene,
+            succeeded: state == .completed ? true : nil
+        )
+        if state == .waitingForChange {
+            statusMessage = "Waiting for the interface to change…"
+            beginObservation(from: scene)
+        } else {
+            statusMessage = response.taskComplete == true ? "Guide completed" : "Answered"
+            activeGuide = nil
+        }
+    }
+
+    private func addingVisualContext(to scene: ScreenScene, point: CGPoint?) async throws -> ScreenScene {
+        let snapshot = try await screenCapture.captureDisplay(
+            containing: point,
+            excludingBundleIdentifiers: privacySettings.excludedBundleIdentifiers
+        )
+        let visualElements = try await visionAnalyzer.analyze(snapshot: snapshot)
+        let sensitiveRegions = sensitiveTextDetector.redactionRegions(in: visualElements)
+        let regions = redactor.automaticRegions(in: scene) + sensitiveRegions
+        let safeSnapshot = try redactor.redact(snapshot: snapshot, regions: regions)
+        return scene
+            .replacingScreenshot(with: safeSnapshot)
+            .replacingVisualElements(with: sensitiveTextDetector.removingSensitiveElements(from: visualElements))
+    }
+
     private func beginObservation(from baseline: ScreenScene) {
         observationTask?.cancel()
         let baselineFingerprint = SceneFingerprint(scene: baseline)
         let targetID = selectedTarget?.elementID
         observationTask = Task { [weak self] in
-            for _ in 0..<150 {
+            for attempt in 0..<46 {
                 guard !Task.isCancelled else { return }
                 try? await Task.sleep(for: .milliseconds(650))
                 guard let self else { return }
                 do {
-                    let newScene = try self.accessibility.captureScene()
+                    let newScene = try self.captureTargetScene()
                     if let targetID,
                        let element = newScene.elements.first(where: { $0.id == targetID }),
                        let bounds = element.bounds {
@@ -246,20 +336,106 @@ final class BeaconController: ObservableObject {
                         self.selectedTarget = target
                         self.overlay.updateTarget(target)
                     }
-                    guard SceneFingerprint(scene: newScene) != baselineFingerprint else { continue }
+                    let accessibilityChanged = SceneFingerprint(scene: newScene) != baselineFingerprint
+                    var visualDifference: Double?
+                    if !accessibilityChanged {
+                        guard attempt.isMultiple(of: 2), let baselineSnapshot = baseline.screenshot else { continue }
+                        let point = baseline.activeWindow?.bounds
+                            .flatMap(DisplayGeometryProvider().currentMapper().axRect(from:))?.center
+                        let currentSnapshot = try await self.screenCapture.captureDisplay(
+                            containing: point,
+                            excludingBundleIdentifiers: self.privacySettings.excludedBundleIdentifiers
+                        )
+                        let difference = FrameDifferenceDetector().difference(
+                            between: baselineSnapshot,
+                            and: currentSnapshot
+                        )
+                        guard difference >= FrameDifferenceDetector().meaningfulThreshold else { continue }
+                        visualDifference = difference
+                    }
                     try self.transition(.meaningfulChangeDetected)
                     self.currentScene = newScene
                     self.statusMessage = "Verifying the result…"
-                    try self.transition(.verificationFinished(success: true, hasNextStep: false))
+                    let verification = StepVerifier().verify(
+                        expected: self.currentResponse?.expectedOutcome,
+                        before: baseline,
+                        after: newScene,
+                        visualDifference: visualDifference
+                    )
+                    if !verification.succeeded {
+                        try self.transition(.verificationFinished(success: false, hasNextStep: false))
+                        self.statusMessage = verification.explanation
+                        if let response = self.currentResponse, let target = self.selectedTarget {
+                            self.overlay.showInstruction(VisualInstruction(
+                                text: "That wasn't the expected change. \(response.message)",
+                                explanation: verification.explanation,
+                                target: target,
+                                overlay: response.action?.overlay ?? .spotlight
+                            ))
+                        }
+                        try self.transition(.instructionPresented(expectsChange: true))
+                        self.beginObservation(from: newScene)
+                        return
+                    }
+
+                    self.recordCompletedStep(from: baseline)
+                    let hasNextStep = self.activeGuide.map {
+                        $0.completedSteps.count < $0.maximumSteps && self.currentResponse?.taskComplete != true
+                    } ?? false
+                    try self.transition(.verificationFinished(success: true, hasNextStep: hasNextStep))
                     self.overlay.dismiss()
-                    self.statusMessage = "Step completed"
-                    if let index = self.history.indices.last { self.history[index] = self.history[index].withSucceeded(true) }
+                    if let index = self.history.firstIndex(where: { $0.succeeded == nil }) {
+                        self.history[index] = self.history[index].withSucceeded(true)
+                    }
+                    if hasNextStep {
+                        await self.continueGuide(from: newScene)
+                    } else {
+                        self.statusMessage = self.activeGuide?.completedSteps.count == self.activeGuide?.maximumSteps
+                            ? "Guide paused at the 8-step safety limit"
+                            : "Guide completed"
+                        self.activeGuide = nil
+                    }
                     return
                 } catch {
                     guard !Task.isCancelled else { return }
                 }
             }
+            guard !Task.isCancelled else { return }
+            self?.statusMessage = "No change detected. Try the highlighted control, or press Escape to stop."
         }
+    }
+
+    private func continueGuide(from changedScene: ScreenScene) async {
+        guard let activeGuide else { return }
+        do {
+            statusMessage = "Preparing the next step…"
+            var scene = changedScene
+            if !privacySettings.isExcluded(bundleIdentifier: scene.activeApplication.bundleIdentifier),
+               CGPreflightScreenCaptureAccess() {
+                let point = scene.activeWindow?.bounds
+                    .flatMap(DisplayGeometryProvider().currentMapper().axRect(from:))?.center
+                scene = try await addingVisualContext(to: scene, point: point)
+            }
+            currentScene = scene
+            try transition(.sceneCaptured)
+            try await generateAndPresent(question: activeGuide.question, mode: .guide, scene: scene)
+        } catch { fail(with: error) }
+    }
+
+    private func recordCompletedStep(from scene: ScreenScene) {
+        guard var guide = activeGuide, let response = currentResponse else { return }
+        let targetID = selectedTarget?.elementID
+        let targetLabel = targetID.flatMap { id in scene.elements.first(where: { $0.id == id })?.bestLabel }
+            ?? response.action?.targetBounds.flatMap { bounds in
+                scene.visualElements.first(where: { $0.bounds == bounds })?.text
+            }
+        guide.completedSteps.append(CompletedGuideStep(
+            number: guide.completedSteps.count + 1,
+            instruction: response.message,
+            targetElementID: targetID,
+            targetLabel: targetLabel
+        ))
+        activeGuide = guide
     }
 
     private func transition(_ event: InstructorEvent) throws {
@@ -309,21 +485,22 @@ private struct SceneFingerprint: Equatable {
     }
 }
 
-private extension CGRect {
-    var center: CGPoint { CGPoint(x: midX, y: midY) }
-}
+private struct ActiveGuide {
+    let question: String
+    let maximumSteps = 8
+    var completedSteps: [CompletedGuideStep] = []
 
-private extension ScreenScene {
-    func replacingScreenshot(with snapshot: ScreenSnapshot?) -> ScreenScene {
-        ScreenScene(
-            timestamp: timestamp,
-            activeApplication: activeApplication,
-            activeWindow: activeWindow,
-            screenshot: snapshot,
-            elements: elements,
-            displays: displays
+    var context: GuideContext {
+        GuideContext(
+            stepNumber: completedSteps.count + 1,
+            maximumSteps: maximumSteps,
+            completedSteps: completedSteps
         )
     }
+}
+
+private extension CGRect {
+    var center: CGPoint { CGPoint(x: midX, y: midY) }
 }
 
 private extension GroundedTarget {

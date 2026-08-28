@@ -69,7 +69,7 @@ struct RedactionService {
             pixelHeight: redactedImage.height,
             displayBounds: snapshot.displayBounds,
             pngData: try pngData(from: redactedImage),
-            redactionCount: applicable.count
+            redactionCount: snapshot.redactionCount + applicable.count
         )
     }
 

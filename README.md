@@ -4,7 +4,7 @@
 
 Beacon is an open-source, privacy-first macOS instructor. Press **Option + Space**, ask how to do something in the app in front of you, and Beacon highlights the real accessible control without taking over your mouse.
 
-This repository contains the native v0.1 grounding prototype and single-step guide loop described in the product brief.
+This repository contains the native v0.1 grounding prototype and verified multi-step guide loop described in the product brief.
 
 ## What works
 
@@ -15,9 +15,12 @@ This repository contains the native v0.1 grounding prototype and single-step gui
 - Click-through rectangle, arrow, circle, and spotlight overlays
 - Overlay target tracking while windows move
 - Local deterministic semantic element matching
+- Local Vision OCR fallback for apps with incomplete Accessibility data
+- Numbered Set-of-Marks image generation and candidate mapping
 - Typed provider boundary, Apple Foundation Models adapter, and optional OpenAI adapter
-- Event-driven step verification from Accessibility changes
-- ScreenCaptureKit privacy preview with local password-field redaction
+- Bounded model contexts with native structured Apple Foundation Models output
+- Verified multi-step guides with an eight-step safety limit
+- ScreenCaptureKit privacy preview with local password, email, phone, card, and API-key redaction
 - Per-application capture exclusions and cloud-processing opt-in
 - Developer inspector and live “draw all elements” overlay
 
@@ -40,7 +43,7 @@ chmod +x scripts/build-app.sh
 open .build/Beacon.app
 ```
 
-On first launch, open **Permissions** and grant Accessibility. Grant Screen Recording only if you want screenshot context and the “What the model sees” preview.
+On first launch, open **Permissions** and grant Accessibility. Grant Screen Recording only if you want local screenshot context, OCR fallback, and the redacted preview.
 
 For command-line development:
 
@@ -76,7 +79,7 @@ See [Architecture](Docs/ARCHITECTURE.md), [Privacy](Docs/PRIVACY.md), and [Devel
 
 ## Current boundary
 
-The v0.1 loop intentionally prioritizes accessibility grounding. Visual-region targets and hybrid strategy interfaces are present, but screenshot-based candidate detection, Set-of-Marks image annotation, OCR redaction, multi-step task planning, and autonomous actions are future milestones.
+The v0.1 loop prioritizes accessibility grounding and uses OCR text regions as its visual fallback. More advanced control-shape detection, having a vision provider select directly from Set-of-Marks, AXObserver notifications, voice, and autonomous actions remain future milestones.
 
 ## License
 

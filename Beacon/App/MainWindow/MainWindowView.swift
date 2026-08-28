@@ -49,9 +49,9 @@ struct MainWindowView: View {
         }
         .alert("Beacon", isPresented: Binding(
             get: { controller.errorMessage != nil },
-            set: { _ in }
+            set: { if !$0 { controller.dismissError() } }
         )) {
-            Button("OK") { controller.cancel() }
+            Button("OK") { controller.dismissError() }
         } message: {
             Text(controller.errorMessage ?? "Unknown error")
         }

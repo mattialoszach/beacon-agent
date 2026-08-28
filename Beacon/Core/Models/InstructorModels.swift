@@ -47,12 +47,46 @@ struct InstructorResponse: Codable, Equatable, Sendable {
     let message: String
     let action: SuggestedAction?
     let expectedOutcome: ExpectedOutcome?
+    var taskComplete: Bool? = nil
+}
+
+extension InstructorResponse {
+    func normalizingVisualTarget(in scene: ScreenScene) -> InstructorResponse {
+        guard let action,
+              let id = action.targetElementId,
+              let visual = scene.visualElements.first(where: { $0.id == id }) else { return self }
+        return InstructorResponse(
+            message: message,
+            action: SuggestedAction(
+                type: action.type,
+                targetElementId: nil,
+                targetBounds: visual.bounds,
+                overlay: action.overlay
+            ),
+            expectedOutcome: expectedOutcome,
+            taskComplete: taskComplete
+        )
+    }
 }
 
 struct InstructorRequest: Codable, Equatable, Sendable {
     let question: String
     let scene: ScreenScene
     let mode: InteractionMode
+    var guideContext: GuideContext? = nil
+}
+
+struct CompletedGuideStep: Codable, Equatable, Sendable {
+    let number: Int
+    let instruction: String
+    let targetElementID: String?
+    let targetLabel: String?
+}
+
+struct GuideContext: Codable, Equatable, Sendable {
+    let stepNumber: Int
+    let maximumSteps: Int
+    let completedSteps: [CompletedGuideStep]
 }
 
 enum InteractionMode: String, Codable, CaseIterable, Sendable {
