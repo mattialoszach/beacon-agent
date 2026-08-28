@@ -10,10 +10,8 @@ struct BeaconMenuView: View {
             Text("Beacon")
                 .font(.headline)
 
-            Button("Ask about Screen") { controller.showPrompt(mode: .ask) }
+            Button("Ask Beacon") { controller.showPrompt() }
                 .keyboardShortcut("a")
-            Button("Start Guide") { controller.showPrompt(mode: .guide) }
-                .keyboardShortcut("g")
 
             Divider()
 

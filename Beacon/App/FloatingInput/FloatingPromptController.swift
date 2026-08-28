@@ -6,8 +6,7 @@ final class FloatingPromptController {
     private var panel: PromptPanel?
 
     func show(
-        mode: InteractionMode,
-        onSubmit: @escaping (String, InteractionMode) -> Void,
+        onSubmit: @escaping (String) -> Void,
         onCancel: @escaping () -> Void
     ) {
         close()
@@ -31,10 +30,9 @@ final class FloatingPromptController {
         panel.hasShadow = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         panel.contentView = NSHostingView(rootView: FloatingPromptView(
-            initialMode: mode,
-            onSubmit: { [weak self] question, selectedMode in
+            onSubmit: { [weak self] question in
                 self?.close()
-                onSubmit(question, selectedMode)
+                onSubmit(question)
             },
             onCancel: { [weak self] in
                 self?.close()
@@ -57,42 +55,25 @@ private final class PromptPanel: NSPanel {
 }
 
 private struct FloatingPromptView: View {
-    let initialMode: InteractionMode
-    let onSubmit: (String, InteractionMode) -> Void
+    let onSubmit: (String) -> Void
     let onCancel: () -> Void
 
     @State private var question = ""
-    @State private var mode: InteractionMode
     @FocusState private var focused: Bool
-
-    init(
-        initialMode: InteractionMode,
-        onSubmit: @escaping (String, InteractionMode) -> Void,
-        onCancel: @escaping () -> Void
-    ) {
-        self.initialMode = initialMode
-        self.onSubmit = onSubmit
-        self.onCancel = onCancel
-        _mode = State(initialValue: initialMode)
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Label("Beacon", systemImage: "scope")
+                Label("Ask Beacon", systemImage: "scope")
                     .font(.headline)
                 Spacer()
-                Picker("Mode", selection: $mode) {
-                    Text("Ask").tag(InteractionMode.ask)
-                    Text("Guide").tag(InteractionMode.guide)
-                }
-                .labelsHidden()
-                .pickerStyle(.segmented)
-                .frame(width: 148)
+                Text("Ask a question or describe a task")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             HStack(spacing: 10) {
-                TextField("What do you want to do?", text: $question)
+                TextField("What do you want to know or do?", text: $question)
                     .textFieldStyle(.plain)
                     .font(.system(size: 17))
                     .focused($focused)
@@ -107,7 +88,7 @@ private struct FloatingPromptView: View {
             .padding(12)
             .background(.black.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
 
-            Text("Return to ask  ·  Esc to dismiss  ·  Beacon never clicks for you")
+            Text("Return to send  ·  Esc to dismiss  ·  Beacon never clicks for you")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -121,6 +102,6 @@ private struct FloatingPromptView: View {
     private func submit() {
         let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        onSubmit(trimmed, mode)
+        onSubmit(trimmed)
     }
 }

@@ -42,6 +42,7 @@ final class BeaconController: ObservableObject {
     private let setOfMarksRenderer = SetOfMarksRenderer()
     private let grounder: any GroundingStrategy = HybridGrounder()
     private let shortcut = GlobalShortcutMonitor()
+    private let requestModeClassifier = RequestModeClassifier()
     private let prompt = FloatingPromptController()
     private let overlay = OverlayController()
     private var machine = InstructorStateMachine()
@@ -76,12 +77,12 @@ final class BeaconController: ObservableObject {
     func start() {
         guard !started else { return }
         started = true
-        let registered = shortcut.registerOptionSpace { [weak self] in self?.showPrompt(mode: .guide) }
+        let registered = shortcut.registerOptionSpace { [weak self] in self?.showPrompt() }
         if !registered { statusMessage = "Option + Space is already used by another app" }
         overlay.onDismiss = { [weak self] in self?.cancel() }
     }
 
-    func showPrompt(mode: InteractionMode) {
+    func showPrompt() {
         guard !screenAccessPaused else {
             statusMessage = "Screen access is paused"
             return
@@ -94,9 +95,10 @@ final class BeaconController: ObservableObject {
             errorMessage = error.localizedDescription
         }
         prompt.show(
-            mode: mode,
-            onSubmit: { [weak self] question, selectedMode in
-                Task { await self?.run(question: question, mode: selectedMode) }
+            onSubmit: { [weak self] question in
+                guard let self else { return }
+                let mode = self.requestModeClassifier.classify(question)
+                Task { await self.run(question: question, mode: mode) }
             },
             onCancel: { [weak self] in self?.cancel() }
         )
@@ -299,7 +301,7 @@ final class BeaconController: ObservableObject {
             statusMessage = "Waiting for the interface to change…"
             beginObservation(from: scene)
         } else {
-            statusMessage = response.taskComplete == true ? "Guide completed" : "Answered"
+            statusMessage = response.taskComplete == true ? "Task completed" : "Answered"
             activeGuide = nil
         }
     }
@@ -391,8 +393,8 @@ final class BeaconController: ObservableObject {
                         await self.continueGuide(from: newScene)
                     } else {
                         self.statusMessage = self.activeGuide?.completedSteps.count == self.activeGuide?.maximumSteps
-                            ? "Guide paused at the 8-step safety limit"
-                            : "Guide completed"
+                            ? "Task paused at the 8-step safety limit"
+                            : "Task completed"
                         self.activeGuide = nil
                     }
                     return

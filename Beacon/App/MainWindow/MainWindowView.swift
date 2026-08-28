@@ -3,7 +3,7 @@ import SwiftUI
 
 private enum AppSection: String, CaseIterable, Identifiable {
     case home = "Home"
-    case history = "Guide History"
+    case history = "History"
     case privacy = "Privacy"
     case models = "Models"
     case permissions = "Permissions"
@@ -32,6 +32,7 @@ struct MainWindowView: View {
                 Label(section.rawValue, systemImage: section.icon).tag(section)
             }
             .navigationTitle("Beacon")
+            .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 280)
             .safeAreaInset(edge: .bottom) {
                 StatusPill()
                     .environmentObject(controller)
@@ -69,7 +70,7 @@ private struct StatusPill: View {
             Text(controller.statusMessage)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
         .padding(9)
@@ -95,20 +96,12 @@ private struct HomeView: View {
                         .frame(maxWidth: 650, alignment: .leading)
                 }
 
-                HStack(spacing: 12) {
-                    Button { controller.showPrompt(mode: .guide) } label: {
-                        Label("Start a Guide", systemImage: "arrow.right.circle.fill")
-                            .frame(minWidth: 130)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-
-                    Button { controller.showPrompt(mode: .ask) } label: {
-                        Label("Ask about Screen", systemImage: "text.bubble")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
+                Button { controller.showPrompt() } label: {
+                    Label("Ask Beacon", systemImage: "arrow.right.circle.fill")
+                        .frame(minWidth: 130)
                 }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
 
                 HStack(spacing: 14) {
                     FeatureCard(icon: "keyboard", title: "Option + Space", detail: "Open Beacon beside your pointer from anywhere.")
@@ -117,7 +110,7 @@ private struct HomeView: View {
                 }
 
                 if let response = controller.currentResponse {
-                    GroupBox("Latest guidance") {
+                    GroupBox("Latest response") {
                         VStack(alignment: .leading, spacing: 9) {
                             Text(controller.currentQuestion ?? "")
                                 .font(.caption)
@@ -165,7 +158,7 @@ private struct HistoryView: View {
         Group {
             if controller.history.isEmpty {
                 ContentUnavailableView(
-                    "No guides yet",
+                    "No activity yet",
                     systemImage: "arrow.triangle.branch",
                     description: Text("Press Option + Space to ask Beacon for guidance.")
                 )
@@ -189,7 +182,7 @@ private struct HistoryView: View {
                 }
             }
         }
-        .navigationTitle("Guide History")
+        .navigationTitle("History")
     }
 }
 

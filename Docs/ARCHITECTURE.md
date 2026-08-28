@@ -4,6 +4,7 @@ Beacon keeps perception, reasoning, grounding, and rendering separate so every d
 
 ```text
 explicit user request
+  → local request-mode classification
   → AccessibilityService + ScreenCaptureService
   → ScreenScene (normalized geometry)
   → local privacy policy + RedactionService
@@ -42,6 +43,8 @@ Models select stable element IDs whenever possible. `AccessibilityGrounder` reso
 The overlay accepts only `GroundedTarget`, so it cannot tell whether a target came from AX, local vision, Set-of-Marks, or a cloud model.
 
 ## Instructor lifecycle
+
+The UI has one **Ask Beacon** entry point. `RequestModeClassifier` locally distinguishes explanatory questions from actionable tasks. This keeps the choice out of the interface while preserving the simpler one-shot answer path and the verified multi-step task path internally.
 
 `InstructorStateMachine` makes each guide step explicit:
 

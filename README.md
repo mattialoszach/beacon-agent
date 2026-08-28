@@ -10,6 +10,7 @@ This repository contains the native v0.1 grounding prototype and verified multi-
 
 - Native SwiftUI/AppKit app with both a menu bar and normal window
 - Global Option + Space prompt positioned beside the pointer
+- One Ask Beacon entry point that infers whether to explain the screen or guide a task
 - Focused-app Accessibility tree extraction with stable per-scene element IDs
 - One normalized, top-left coordinate space across Retina and multiple displays
 - Click-through rectangle, arrow, circle, and spotlight overlays
@@ -58,7 +59,7 @@ Running the packaged app is recommended because macOS attaches privacy permissio
 
 1. Open a standard macOS application such as TextEdit or Preview.
 2. Press Option + Space and ask “Where is Print?” or “How do I export this?”
-3. Beacon selects an accessible candidate and renders a native click-through overlay.
+3. Beacon infers the request type, selects an accessible candidate, and renders a native click-through overlay when guidance is needed.
 4. Open **Developer Inspector** to inspect exact IDs, bounds, the selected strategy, and the redacted image.
 5. Choose **Draw All Elements** to validate geometry live while moving the target window.
 

@@ -106,11 +106,32 @@ private struct InstructionCallout: View {
     let target: CGRect
     let availableSize: CGSize
 
+    private var calloutWidth: CGFloat {
+        max(180, min(420, availableSize.width - 24))
+    }
+
+    private var estimatedHeight: CGFloat {
+        let charactersPerLine = max(18, Int((calloutWidth - 58) / 7))
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).reduce(0) { count, line in
+            count + max(1, Int(ceil(Double(line.count) / Double(charactersPerLine))))
+        }
+        return 38 + CGFloat(lines * 18)
+    }
+
     private var position: CGPoint {
-        let estimatedWidth: CGFloat = 230
-        let x = min(max(estimatedWidth / 2 + 12, target.midX), availableSize.width - estimatedWidth / 2 - 12)
-        let preferredY = target.maxY + 42
-        return CGPoint(x: x, y: min(preferredY, availableSize.height - 36))
+        let x = min(
+            max(calloutWidth / 2 + 12, target.midX),
+            availableSize.width - calloutWidth / 2 - 12
+        )
+        let spacing: CGFloat = 16
+        let below = target.maxY + spacing + estimatedHeight / 2
+        let above = target.minY - spacing - estimatedHeight / 2
+        let preferredY = below + estimatedHeight / 2 + 12 <= availableSize.height ? below : above
+        let y = min(
+            max(estimatedHeight / 2 + 12, preferredY),
+            availableSize.height - estimatedHeight / 2 - 12
+        )
+        return CGPoint(x: x, y: y)
     }
 
     var body: some View {
@@ -119,12 +140,13 @@ private struct InstructionCallout: View {
                 .foregroundStyle(Color.accentColor)
             Text(text)
                 .font(.system(size: 14, weight: .semibold))
-                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+                .multilineTextAlignment(.leading)
         }
         .foregroundStyle(.primary)
         .padding(.horizontal, 13)
         .padding(.vertical, 10)
-        .frame(maxWidth: 230)
+        .frame(width: calloutWidth, alignment: .leading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.2)))
         .shadow(radius: 12)
