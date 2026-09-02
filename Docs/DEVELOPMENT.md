@@ -11,6 +11,17 @@ open .build/Beacon.app
 
 The package targets macOS 14. Apple Foundation Models code is availability-gated for macOS 26.
 
+## Previewing the thinking animation
+
+Launch an isolated prompt preview without Screen Recording or Accessibility access:
+
+```sh
+./scripts/build-app.sh
+open -n .build/Beacon.app --args --preview-thinking
+```
+
+Type any text and press Return to run the real box-to-thinking-bubble transition. Press Escape to dismiss it. This preview path does not capture a scene or invoke a model.
+
 ## Debugging grounding
 
 Developer Inspector is hidden from the sidebar by default. Enable **Show Developer Inspector** under **Models** to capture the active app, examine normalized Accessibility, OCR, rectangle, circle, icon, and freeform candidates, inspect intent confidence, and render detected accessible elements. Move the inspected window between displays while the debug overlay is visible; labels and rectangles refresh twice per second.

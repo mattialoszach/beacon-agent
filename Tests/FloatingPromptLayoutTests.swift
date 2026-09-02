@@ -2,11 +2,11 @@ import XCTest
 @testable import Beacon
 
 final class FloatingPromptLayoutTests: XCTestCase {
-    func testThinkingSurfaceIsACompactCircle() {
+    func testThinkingSurfaceUsesACompactSquareCanvas() {
         let frame = FloatingPromptLayout.surfaceFrame(isThinking: true)
 
         XCTAssertEqual(frame.width, frame.height)
-        XCTAssertEqual(frame.size, CGSize(width: 64, height: 64))
+        XCTAssertEqual(frame.size, CGSize(width: 72, height: 72))
         XCTAssertLessThan(frame.width, FloatingPromptLayout.promptSize.width / 5)
     }
 

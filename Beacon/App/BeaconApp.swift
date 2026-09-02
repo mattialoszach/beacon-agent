@@ -37,10 +37,31 @@ struct BeaconApp: App {
     }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var previewPrompt: FloatingPromptController?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        guard BeaconLaunchOptions.isThinkingPreview(arguments: CommandLine.arguments) else { return }
+
+        let prompt = FloatingPromptController()
+        previewPrompt = prompt
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self, weak prompt] in
+            prompt?.show(
+                onSubmit: { _ in },
+                onCancel: { self?.previewPrompt = nil }
+            )
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+}
+
+enum BeaconLaunchOptions {
+    static let thinkingPreview = "--preview-thinking"
+
+    static func isThinkingPreview(arguments: [String]) -> Bool {
+        arguments.contains(thinkingPreview)
+    }
 }
