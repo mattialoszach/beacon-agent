@@ -5,6 +5,8 @@ import SwiftUI
 final class FloatingPromptController {
     private var panel: PromptPanel?
     private var presentation: FloatingPromptPresentation?
+    private var statusEscapeMonitor: Any?
+    private var localStatusEscapeMonitor: Any?
 
     func show(
         onSubmit: @escaping (String) -> Void,
@@ -35,15 +37,27 @@ final class FloatingPromptController {
     }
 
     func showThinking(message: String, onCancel: @escaping () -> Void) {
+        showStatus(mode: .thinking, message: message, onCancel: onCancel)
+    }
+
+    func showWaiting(message: String, onCancel: @escaping () -> Void) {
+        showStatus(mode: .waiting, message: message, onCancel: onCancel)
+    }
+
+    private func showStatus(
+        mode: FloatingPromptPresentation.Mode,
+        message: String,
+        onCancel: @escaping () -> Void
+    ) {
         if let presentation {
-            panel?.ignoresMouseEvents = true
-            presentation.showThinking(message: message)
+            presentation.showStatus(mode: mode, message: message)
+            if let panel { configureForStatus(panel) }
             return
         }
 
         let panel = makePanel()
         let presentation = FloatingPromptPresentation(
-            mode: .thinking,
+            mode: mode,
             message: message,
             onSubmit: { _ in },
             onCancel: { [weak self] in
@@ -54,10 +68,9 @@ final class FloatingPromptController {
         panel.contentView = NSHostingView(rootView: FloatingPromptView(
             presentation: presentation
         ))
-        panel.ignoresMouseEvents = true
-        panel.makeKeyAndOrderFront(nil)
         self.panel = panel
         self.presentation = presentation
+        configureForStatus(panel)
     }
 
     func updateThinking(message: String) {
@@ -65,6 +78,7 @@ final class FloatingPromptController {
     }
 
     func close() {
+        removeStatusEscapeMonitors()
         panel?.orderOut(nil)
         panel = nil
         presentation = nil
@@ -95,6 +109,7 @@ final class FloatingPromptController {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
+        panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         return panel
     }
@@ -118,10 +133,52 @@ final class FloatingPromptController {
             self.focusPrompt(in: panel, attempt: attempt + 1)
         }
     }
+
+    private func configureForStatus(_ panel: PromptPanel) {
+        panel.acceptsKeyEvents = false
+        panel.ignoresMouseEvents = true
+        if panel.isKeyWindow { panel.resignKey() }
+        moveToStatusLocation(panel)
+        panel.orderFrontRegardless()
+        installStatusEscapeMonitors()
+    }
+
+    private func moveToStatusLocation(_ panel: NSPanel) {
+        let screen = panel.screen
+            ?? NSScreen.screens.first(where: { $0.frame.intersects(panel.frame) })
+            ?? NSScreen.main
+        guard let visible = screen?.visibleFrame else { return }
+        panel.setFrameOrigin(CGPoint(
+            x: visible.midX - panel.frame.width / 2,
+            y: visible.minY + 12
+        ))
+    }
+
+    private func installStatusEscapeMonitors() {
+        removeStatusEscapeMonitors()
+        statusEscapeMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard event.keyCode == 53 else { return }
+            Task { @MainActor in self?.presentation?.onCancel() }
+        }
+        localStatusEscapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard event.keyCode == 53 else { return event }
+            Task { @MainActor in self?.presentation?.onCancel() }
+            return nil
+        }
+    }
+
+    private func removeStatusEscapeMonitors() {
+        if let statusEscapeMonitor { NSEvent.removeMonitor(statusEscapeMonitor) }
+        if let localStatusEscapeMonitor { NSEvent.removeMonitor(localStatusEscapeMonitor) }
+        statusEscapeMonitor = nil
+        localStatusEscapeMonitor = nil
+    }
 }
 
-private final class PromptPanel: NSPanel {
-    override var canBecomeKey: Bool { true }
+final class PromptPanel: NSPanel {
+    var acceptsKeyEvents = true
+
+    override var canBecomeKey: Bool { acceptsKeyEvents }
     override var canBecomeMain: Bool { false }
 }
 
@@ -145,9 +202,9 @@ enum PromptFocusResolver {
 struct FloatingPromptLayout {
     static let panelSize = CGSize(width: 440, height: 176)
     static let promptSize = CGSize(width: 408, height: 142)
-    static let thinkingSize = CGSize(width: 72, height: 72)
+    static let thinkingSize = CGSize(width: 380, height: 110)
     static let promptOffsetY: CGFloat = -9
-    static let thinkingOffsetY: CGFloat = 42
+    static let thinkingOffsetY: CGFloat = 22
 
     static func surfaceFrame(isThinking: Bool) -> CGRect {
         let size = isThinking ? thinkingSize : promptSize
@@ -166,6 +223,9 @@ private final class FloatingPromptPresentation: ObservableObject {
     enum Mode: Equatable {
         case prompt
         case thinking
+        case waiting
+
+        var isStatus: Bool { self != .prompt }
     }
 
     @Published private(set) var mode: Mode
@@ -186,13 +246,14 @@ private final class FloatingPromptPresentation: ObservableObject {
         self.onCancel = onCancel
     }
 
-    func showThinking(message: String) {
+    func showStatus(mode: Mode, message: String) {
+        precondition(mode.isStatus)
         self.message = message
-        mode = .thinking
+        self.mode = mode
     }
 
     func updateThinking(message: String) {
-        guard mode == .thinking else { return }
+        guard mode.isStatus else { return }
         self.message = message
     }
 }
@@ -204,7 +265,7 @@ private struct FloatingPromptView: View {
     @State private var question = ""
     @FocusState private var focused: Bool
 
-    private var isThinking: Bool { presentation.mode == .thinking }
+    private var isThinking: Bool { presentation.mode.isStatus }
 
     var body: some View {
         ZStack {
@@ -217,7 +278,7 @@ private struct FloatingPromptView: View {
                     value: isThinking
                 )
             promptContents
-            DreamyThinkingOrb(message: presentation.message)
+            TeacherStatusView(mode: presentation.mode, message: presentation.message)
                 .opacity(isThinking ? 1 : 0)
                 .blur(radius: isThinking ? 0 : 2.5)
                 .accessibilityHidden(!isThinking)
@@ -232,7 +293,7 @@ private struct FloatingPromptView: View {
             width: isThinking ? FloatingPromptLayout.thinkingSize.width : FloatingPromptLayout.promptSize.width,
             height: isThinking ? FloatingPromptLayout.thinkingSize.height : FloatingPromptLayout.promptSize.height
         )
-        .clipShape(RoundedRectangle(cornerRadius: isThinking ? 28 : 18, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: isThinking ? 20 : 18, style: .continuous))
         .shadow(
             color: .black.opacity(isThinking ? 0.2 : 0.24),
             radius: isThinking ? 18 : 28,
@@ -256,7 +317,7 @@ private struct FloatingPromptView: View {
 
     private var surface: some View {
         let shape = RoundedRectangle(
-            cornerRadius: isThinking ? FloatingPromptLayout.thinkingSize.width / 2 : 18,
+            cornerRadius: isThinking ? 20 : 18,
             style: .continuous
         )
 
@@ -348,18 +409,49 @@ private struct FloatingPromptView: View {
     }
 }
 
-private struct DreamyThinkingOrb: View {
+private struct TeacherStatusView: View {
+    let mode: FloatingPromptPresentation.Mode
     let message: String
 
     var body: some View {
-        TranslucentThinkingForm()
-            .frame(
-                width: FloatingPromptLayout.thinkingSize.width,
-                height: FloatingPromptLayout.thinkingSize.height
-            )
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Beacon is thinking. \(message)")
-            .accessibilityHint("Press Escape to cancel")
+        HStack(spacing: 13) {
+            statusIcon
+                .frame(width: 54, height: 54)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(mode == .waiting ? "Your turn" : "Beacon is checking")
+                    .font(.system(size: 14, weight: .semibold))
+                Text(message)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(mode == .waiting ? "I’ll continue automatically  ·  Esc to stop" : "Please wait  ·  Esc to cancel")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .frame(width: FloatingPromptLayout.thinkingSize.width, height: FloatingPromptLayout.thinkingSize.height)
+        .allowsHitTesting(false)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(mode == .waiting ? "Beacon needs your help. \(message)" : "Beacon is thinking. \(message)")
+        .accessibilityHint("Press Escape to cancel")
+    }
+
+    @ViewBuilder
+    private var statusIcon: some View {
+        if mode == .waiting {
+            Image(systemName: "arrow.counterclockwise")
+                .font(.system(size: 21, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 46, height: 46)
+                .background(BeaconPalette.accentGradient, in: Circle())
+                .shadow(color: BeaconPalette.blueViolet.opacity(0.25), radius: 8, y: 4)
+        } else {
+            TranslucentThinkingForm()
+        }
     }
 }
 

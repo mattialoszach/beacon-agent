@@ -2,12 +2,12 @@ import XCTest
 @testable import Beacon
 
 final class FloatingPromptLayoutTests: XCTestCase {
-    func testThinkingSurfaceUsesACompactSquareCanvas() {
+    func testThinkingSurfaceHasRoomForVisibleStatusText() {
         let frame = FloatingPromptLayout.surfaceFrame(isThinking: true)
 
-        XCTAssertEqual(frame.width, frame.height)
-        XCTAssertEqual(frame.size, CGSize(width: 72, height: 72))
-        XCTAssertLessThan(frame.width, FloatingPromptLayout.promptSize.width / 5)
+        XCTAssertEqual(frame.size, CGSize(width: 380, height: 110))
+        XCTAssertLessThan(frame.width, FloatingPromptLayout.promptSize.width)
+        XCTAssertGreaterThan(frame.width, frame.height * 3)
     }
 
     func testThinkingSurfaceMovesDownFromPrompt() {

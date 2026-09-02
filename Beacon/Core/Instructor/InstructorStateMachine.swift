@@ -6,6 +6,7 @@ enum InstructorState: String, Codable, Equatable, Sendable {
     case capturingScene
     case grounding
     case presenting
+    case awaitingContextRestore
     case waitingForChange
     case verifying
     case completed
@@ -17,6 +18,8 @@ enum InstructorEvent: Equatable, Sendable {
     case sceneCaptured
     case responseGenerated(needsTarget: Bool)
     case targetGrounded
+    case contextLost
+    case contextRestored
     case instructionPresented(expectsChange: Bool)
     case meaningfulChangeDetected
     case verificationFinished(success: Bool, hasNextStep: Bool)
@@ -43,6 +46,8 @@ struct InstructorStateMachine: Equatable, Sendable {
         case (.capturingScene, .sceneCaptured): state = .understanding
         case let (.understanding, .responseGenerated(needsTarget)): state = needsTarget ? .grounding : .presenting
         case (.grounding, .targetGrounded): state = .presenting
+        case (.presenting, .contextLost): state = .awaitingContextRestore
+        case (.awaitingContextRestore, .contextRestored): state = .capturingScene
         case let (.presenting, .instructionPresented(expectsChange)):
             state = expectsChange ? .waitingForChange : .completed
         case (.waitingForChange, .meaningfulChangeDetected): state = .verifying

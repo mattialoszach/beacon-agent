@@ -20,7 +20,7 @@ Launch an isolated prompt preview without Screen Recording or Accessibility acce
 open -n .build/Beacon.app --args --preview-thinking
 ```
 
-Type any text and press Return to run the real box-to-thinking-bubble transition. Press Escape to dismiss it. This preview path does not capture a scene or invoke a model.
+Type any text and press Return to run the real prompt-to-teacher-status transition. The status HUD shows Beacon’s current processing message without becoming key or intercepting clicks. Press Escape to dismiss it. This preview path does not capture a scene or invoke a model.
 
 ## Debugging grounding
 

@@ -23,4 +23,15 @@ final class InstructorStateMachineTests: XCTestCase {
         _ = try machine.handle(.questionReceived)
         XCTAssertEqual(try machine.handle(.cancel), .idle)
     }
+
+    func testStalePresentationWaitsForContextAndThenRecaptures() throws {
+        var machine = InstructorStateMachine()
+        _ = try machine.handle(.questionReceived)
+        _ = try machine.handle(.sceneCaptured)
+        _ = try machine.handle(.responseGenerated(needsTarget: true))
+        _ = try machine.handle(.targetGrounded)
+
+        XCTAssertEqual(try machine.handle(.contextLost), .awaitingContextRestore)
+        XCTAssertEqual(try machine.handle(.contextRestored), .capturingScene)
+    }
 }

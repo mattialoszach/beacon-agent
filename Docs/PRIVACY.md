@@ -9,7 +9,7 @@ Beacon's default path is local and Accessibility-first. No account, API key, scr
 - Applications in the exclusion list never produce screenshots and are forced onto the local deterministic provider.
 - Password values are removed during Accessibility extraction.
 - Secure text fields and OCR-detected emails, phone numbers, credit cards, and common API-key formats are masked locally before a screenshot is stored as the current privacy preview.
-- Temporary verification frames stay in memory and are never sent to a model.
+- Temporary freshness and verification frames stay in memory and are never sent to a model.
 - Excluded applications are removed from ScreenCaptureKit at capture time, including when their windows share a display with the active app.
 - Overlay and prompt windows are rendered locally and never become model drawing input.
 

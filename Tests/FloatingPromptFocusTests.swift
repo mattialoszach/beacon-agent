@@ -21,4 +21,17 @@ final class FloatingPromptFocusTests: XCTestCase {
 
         XCTAssertNil(PromptFocusResolver.editableTextField(in: root))
     }
+
+    func testStatusPanelCanBePreventedFromTakingKeyFocus() {
+        let panel = PromptPanel(
+            contentRect: CGRect(x: 0, y: 0, width: 100, height: 100),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+
+        XCTAssertTrue(panel.canBecomeKey)
+        panel.acceptsKeyEvents = false
+        XCTAssertFalse(panel.canBecomeKey)
+    }
 }

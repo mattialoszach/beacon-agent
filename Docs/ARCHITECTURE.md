@@ -53,9 +53,12 @@ The UI has one **Ask Beacon** entry point. `RequestModeClassifier` combines an o
 ```text
 idle → capturingScene → understanding → grounding → presenting
      → waitingForChange → verifying → completed
+                         ↘ awaitingContextRestore → capturingScene
 ```
 
-Cancellation returns any state to idle. Invalid transitions throw. While a visible guide step is active, `AccessibilityChangeObserver` listens for focus, value, menu, window, layout, move, and resize notifications. A three-second fallback timer covers applications that do not publish useful events. Visual verification samples remain local and in memory. Successful verification advances the same guide with completed-step context, up to an eight-step safety limit.
+Before an instruction reaches the overlay, `SceneFreshnessValidator` recaptures the Accessibility scene and confirms that the application, window, semantic interface, and target still match the scene used for reasoning. It refreshes valid Accessibility bounds and requires a new matching frame for visual targets. A stale result is never rendered. If the user already completed the expected step, Beacon verifies it and replans from the new scene. Otherwise it enters `awaitingContextRestore`, explains what needs to be reopened, and resumes from a fresh capture when that context returns.
+
+Cancellation returns any state to idle. Invalid transitions throw. The visible processing and recovery HUD is a click-through, non-key panel, so it does not dismiss menus or popovers. While a visible guide step or context-recovery request is active, `AccessibilityChangeObserver` listens for focus, value, menu, window, layout, move, and resize notifications. Low-rate fallback timers cover applications that do not publish useful events. Visual verification samples remain local and in memory. Successful verification advances the same guide with completed-step context, up to an eight-step safety limit.
 
 `ApplicationGuidePolicyRegistry` contains guidance-only fixtures for common TextEdit, Preview, Finder, Safari, and System Settings tasks. It can recover from layout differences, retries unexpected or missing changes within application-specific limits, and stops with an actionable message when an outcome cannot be confirmed. It never performs the action for the user.
 
