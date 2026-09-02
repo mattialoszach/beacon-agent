@@ -53,6 +53,8 @@ final class BeaconController: ObservableObject {
     private var machine = InstructorStateMachine()
     private var preparedScene: ScreenScene?
     private var currentSetOfMarks: [SetOfMark] = []
+    private var requestTask: Task<Void, Never>?
+    private var requestID: UUID?
     private var observationTask: Task<Void, Never>?
     private var observationID: UUID?
     private var debugObservationTask: Task<Void, Never>?
@@ -114,14 +116,24 @@ final class BeaconController: ObservableObject {
                     scene: self.preparedScene
                 )
                 self.requestModeClassification = classification
-                Task { await self.run(question: question, mode: classification.mode) }
+                let identifier = UUID()
+                self.requestTask?.cancel()
+                self.requestID = identifier
+                self.requestTask = Task { [weak self] in
+                    guard let self else { return }
+                    await self.run(question: question, mode: classification.mode)
+                    if self.requestID == identifier {
+                        self.requestTask = nil
+                        self.requestID = nil
+                    }
+                }
             },
             onCancel: { [weak self] in self?.cancel() }
         )
     }
 
     func run(question: String, mode: InteractionMode) async {
-        cancel(resetMessage: false)
+        cancel(resetMessage: false, dismissesPrompt: false, cancelsRequest: false)
         currentQuestion = question
         errorMessage = nil
         outboundImagePreview = nil
@@ -129,6 +141,7 @@ final class BeaconController: ObservableObject {
         do {
             try transition(.questionReceived)
             statusMessage = "Reading the current interface…"
+            prompt.updateThinking(message: statusMessage)
             var scene = try preparedScene ?? captureTargetScene()
             preparedScene = nil
 
@@ -146,7 +159,10 @@ final class BeaconController: ObservableObject {
             currentScene = scene
             try transition(.sceneCaptured)
             try await generateAndPresent(question: question, mode: mode, scene: scene)
+        } catch is CancellationError {
+            return
         } catch {
+            guard !Task.isCancelled else { return }
             fail(with: error)
         }
     }
@@ -195,7 +211,16 @@ final class BeaconController: ObservableObject {
         overlay.dismiss()
     }
 
-    func cancel(resetMessage: Bool = true) {
+    func cancel(
+        resetMessage: Bool = true,
+        dismissesPrompt: Bool = true,
+        cancelsRequest: Bool = true
+    ) {
+        if cancelsRequest {
+            requestID = nil
+            requestTask?.cancel()
+            requestTask = nil
+        }
         observationTask?.cancel()
         observationTask = nil
         observationID = nil
@@ -203,7 +228,7 @@ final class BeaconController: ObservableObject {
         debugObservationTask?.cancel()
         debugObservationTask = nil
         overlay.dismiss()
-        prompt.close()
+        if dismissesPrompt { prompt.close() }
         try? transition(.cancel)
         selectedTarget = nil
         activeGuide = nil
@@ -280,6 +305,7 @@ final class BeaconController: ObservableObject {
         modelContextPreview = "Question: \(question)\n\(modelContext.text)"
         let step = activeGuide.map { " step \($0.completedSteps.count + 1)" } ?? ""
         statusMessage = "Reasoning with \(model.id) for\(step)…"
+        prompt.updateThinking(message: statusMessage)
         let modelResponse = try await model.reason(request: request)
         let response: InstructorResponse
         if mode == .guide, modelResponse.action?.type == .pointToElement,
@@ -302,6 +328,8 @@ final class BeaconController: ObservableObject {
         try transition(.responseGenerated(needsTarget: response.action?.type == .pointToElement))
 
         if let action = response.action, action.type == .pointToElement {
+            statusMessage = "Locating the right control…"
+            prompt.updateThinking(message: statusMessage)
             let resolver: any GroundingStrategy = action.targetMark == nil
                 ? grounder
                 : SetOfMarksGrounder(marks: request.setOfMarks)
@@ -328,6 +356,7 @@ final class BeaconController: ObservableObject {
 
         let expectsChange = response.expectedOutcome != nil && response.action != nil
         try transition(.instructionPresented(expectsChange: expectsChange))
+        prompt.close()
         appendHistory(
             question: question,
             response: response,
@@ -410,6 +439,10 @@ final class BeaconController: ObservableObject {
                     try self.transition(.meaningfulChangeDetected)
                     self.currentScene = newScene
                     self.statusMessage = "Verifying the result…"
+                    self.overlay.dismiss()
+                    self.prompt.showThinking(message: self.statusMessage) { [weak self] in
+                        self?.cancel()
+                    }
                     let verification = StepVerifier().verify(
                         expected: self.currentResponse?.expectedOutcome,
                         before: baseline,
@@ -430,6 +463,7 @@ final class BeaconController: ObservableObject {
                             return
                         }
                         self.statusMessage = decision.message
+                        self.prompt.close()
                         if let response = self.currentResponse, let target = self.selectedTarget {
                             self.overlay.showInstruction(VisualInstruction(
                                 text: "\(response.message) Try once more.",
@@ -457,6 +491,7 @@ final class BeaconController: ObservableObject {
                     if hasNextStep {
                         await self.continueGuide(from: newScene)
                     } else {
+                        self.prompt.close()
                         self.statusMessage = self.activeGuide?.completedSteps.count == self.activeGuide?.maximumSteps
                             ? "Task paused at the 8-step safety limit"
                             : "Task completed"
@@ -526,6 +561,7 @@ final class BeaconController: ObservableObject {
         observationTask = nil
         observationID = nil
         overlay.dismiss()
+        prompt.close()
         try? transition(.fail)
         statusMessage = message
         activeGuide = nil
@@ -538,6 +574,9 @@ final class BeaconController: ObservableObject {
         guard let activeGuide else { return }
         do {
             statusMessage = "Preparing the next step…"
+            prompt.showThinking(message: statusMessage) { [weak self] in
+                self?.cancel()
+            }
             var scene = changedScene
             if !privacySettings.isExcluded(bundleIdentifier: scene.activeApplication.bundleIdentifier),
                CGPreflightScreenCaptureAccess() {
@@ -548,7 +587,12 @@ final class BeaconController: ObservableObject {
             currentScene = scene
             try transition(.sceneCaptured)
             try await generateAndPresent(question: activeGuide.question, mode: .guide, scene: scene)
-        } catch { fail(with: error) }
+        } catch is CancellationError {
+            return
+        } catch {
+            guard !Task.isCancelled else { return }
+            fail(with: error)
+        }
     }
 
     private func recordCompletedStep(from scene: ScreenScene) {
@@ -579,6 +623,7 @@ final class BeaconController: ObservableObject {
         errorMessage = error.localizedDescription
         statusMessage = "Beacon couldn't complete that request"
         overlay.dismiss()
+        prompt.close()
     }
 
     private func appendHistory(

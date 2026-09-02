@@ -97,7 +97,7 @@ private struct HomeView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Image(systemName: "scope")
                         .font(.system(size: 34, weight: .medium))
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(BeaconPalette.blueViolet)
                     Text("Ask. See. Do.")
                         .font(.system(size: 34, weight: .bold, design: .rounded))
                     Text("Beacon finds real controls in the app you're using and points you to the next step. You stay in control.")
@@ -151,7 +151,7 @@ private struct FeatureCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Image(systemName: icon).font(.title2).foregroundStyle(Color.accentColor)
+            Image(systemName: icon).font(.title2).foregroundStyle(BeaconPalette.blueViolet)
             Text(title).font(.headline)
             Text(detail).font(.callout).foregroundStyle(.secondary)
         }

@@ -62,27 +62,148 @@ private struct GuidanceArrow: View {
 
     var body: some View {
         Canvas { context, _ in
-            let rightSide = target.midX < availableSize.width / 2
-            let start = CGPoint(
-                x: rightSide ? min(availableSize.width - 24, target.maxX + 92) : max(24, target.minX - 92),
-                y: max(24, target.minY - 62)
-            )
-            let end = CGPoint(x: target.midX, y: target.midY)
-            var shaft = Path()
-            shaft.move(to: start)
-            shaft.addLine(to: end)
-            context.stroke(shaft, with: .color(.accentColor), style: StrokeStyle(lineWidth: 5, lineCap: .round))
+            guard let geometry = GuidanceArrowGeometry.layout(
+                target: target,
+                availableSize: availableSize
+            ) else {
+                return
+            }
 
-            let angle = atan2(end.y - start.y, end.x - start.x)
+            var shaft = Path()
+            shaft.move(to: geometry.start)
+            shaft.addQuadCurve(to: geometry.end, control: geometry.control)
+            context.stroke(
+                shaft,
+                with: .color(.black.opacity(0.22)),
+                style: StrokeStyle(lineWidth: 9, lineCap: .round)
+            )
+            context.stroke(
+                shaft,
+                with: .linearGradient(
+                    Gradient(colors: [
+                        BeaconPalette.mediumPurple.opacity(0.82),
+                        BeaconPalette.blueViolet
+                    ]),
+                    startPoint: geometry.start,
+                    endPoint: geometry.end
+                ),
+                style: StrokeStyle(lineWidth: 5, lineCap: .round)
+            )
+
+            let angle = atan2(
+                geometry.end.y - geometry.control.y,
+                geometry.end.x - geometry.control.x
+            )
             let wing: CGFloat = 17
             var head = Path()
-            head.move(to: end)
-            head.addLine(to: CGPoint(x: end.x - wing * cos(angle - .pi / 6), y: end.y - wing * sin(angle - .pi / 6)))
-            head.move(to: end)
-            head.addLine(to: CGPoint(x: end.x - wing * cos(angle + .pi / 6), y: end.y - wing * sin(angle + .pi / 6)))
-            context.stroke(head, with: .color(.accentColor), style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
+            head.move(to: geometry.end)
+            head.addLine(to: CGPoint(
+                x: geometry.end.x - wing * cos(angle - .pi / 6),
+                y: geometry.end.y - wing * sin(angle - .pi / 6)
+            ))
+            head.move(to: geometry.end)
+            head.addLine(to: CGPoint(
+                x: geometry.end.x - wing * cos(angle + .pi / 6),
+                y: geometry.end.y - wing * sin(angle + .pi / 6)
+            ))
+            context.stroke(
+                head,
+                with: .color(.black.opacity(0.22)),
+                style: StrokeStyle(lineWidth: 9, lineCap: .round, lineJoin: .round)
+            )
+            context.stroke(
+                head,
+                with: .color(BeaconPalette.blueViolet),
+                style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round)
+            )
         }
         .allowsHitTesting(false)
+    }
+}
+
+struct GuidanceArrowGeometry: Equatable {
+    enum Side: Equatable {
+        case top
+        case right
+        case bottom
+        case left
+    }
+
+    let side: Side
+    let start: CGPoint
+    let control: CGPoint
+    let end: CGPoint
+
+    static func layout(
+        target: CGRect,
+        availableSize: CGSize,
+        margin: CGFloat = 22,
+        targetGap: CGFloat = 9,
+        preferredLength: CGFloat = 78
+    ) -> GuidanceArrowGeometry? {
+        guard availableSize.width.isFinite,
+              availableSize.height.isFinite,
+              target.origin.x.isFinite,
+              target.origin.y.isFinite,
+              target.width.isFinite,
+              target.height.isFinite,
+              availableSize.width > margin * 2,
+              availableSize.height > margin * 2 else { return nil }
+
+        let canvas = CGRect(origin: .zero, size: availableSize)
+        let visibleTarget = target.standardized.intersection(canvas)
+        guard !visibleTarget.isNull, !visibleTarget.isEmpty else { return nil }
+
+        let clearances: [(Side, CGFloat)] = [
+            (.top, visibleTarget.minY - margin),
+            (.right, availableSize.width - margin - visibleTarget.maxX),
+            (.bottom, availableSize.height - margin - visibleTarget.maxY),
+            (.left, visibleTarget.minX - margin)
+        ]
+        guard let placement = clearances.max(by: { $0.1 < $1.1 }),
+              placement.1 >= targetGap + 20 else { return nil }
+
+        let shaftLength = min(preferredLength, placement.1 - targetGap)
+        let end: CGPoint
+        let start: CGPoint
+
+        switch placement.0 {
+        case .top:
+            end = CGPoint(x: visibleTarget.midX, y: visibleTarget.minY - targetGap)
+            start = CGPoint(x: end.x, y: end.y - shaftLength)
+        case .right:
+            end = CGPoint(x: visibleTarget.maxX + targetGap, y: visibleTarget.midY)
+            start = CGPoint(x: end.x + shaftLength, y: end.y)
+        case .bottom:
+            end = CGPoint(x: visibleTarget.midX, y: visibleTarget.maxY + targetGap)
+            start = CGPoint(x: end.x, y: end.y + shaftLength)
+        case .left:
+            end = CGPoint(x: visibleTarget.minX - targetGap, y: visibleTarget.midY)
+            start = CGPoint(x: end.x - shaftLength, y: end.y)
+        }
+
+        let midpoint = CGPoint(x: (start.x + end.x) / 2, y: (start.y + end.y) / 2)
+        let bend: CGFloat = 7
+        let control: CGPoint
+        switch placement.0 {
+        case .top, .bottom:
+            control = CGPoint(
+                x: midpoint.x + (visibleTarget.midX < availableSize.width / 2 ? bend : -bend),
+                y: midpoint.y
+            )
+        case .right, .left:
+            control = CGPoint(
+                x: midpoint.x,
+                y: midpoint.y + (visibleTarget.midY < availableSize.height / 2 ? bend : -bend)
+            )
+        }
+
+        return GuidanceArrowGeometry(
+            side: placement.0,
+            start: start,
+            control: control,
+            end: end
+        )
     }
 }
 
@@ -91,10 +212,10 @@ private struct TargetHighlight: View {
 
     var body: some View {
         RoundedRectangle(cornerRadius: style == .circle ? 999 : 8)
-            .stroke(Color.accentColor, lineWidth: 4)
+            .stroke(BeaconPalette.blueViolet, lineWidth: 4)
             .background(
                 RoundedRectangle(cornerRadius: style == .circle ? 999 : 8)
-                    .fill(Color.accentColor.opacity(0.12))
+                    .fill(BeaconPalette.plum.opacity(0.18))
             )
             .shadow(color: .black.opacity(0.35), radius: 8)
             .animation(.easeOut(duration: 0.18), value: style)
@@ -137,7 +258,7 @@ private struct InstructionCallout: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "arrow.up.left")
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(BeaconPalette.blueViolet)
             Text(text)
                 .font(.system(size: 14, weight: .semibold))
                 .fixedSize(horizontal: false, vertical: true)

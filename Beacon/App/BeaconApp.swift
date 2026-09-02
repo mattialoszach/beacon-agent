@@ -12,6 +12,7 @@ struct BeaconApp: App {
             MainWindowView()
                 .environmentObject(controller)
                 .environmentObject(appPreferences)
+                .tint(BeaconPalette.blueViolet)
                 .frame(minWidth: 900, minHeight: 620)
                 .task { controller.start() }
         }
@@ -20,6 +21,7 @@ struct BeaconApp: App {
         MenuBarExtra {
             BeaconMenuView()
                 .environmentObject(controller)
+                .tint(BeaconPalette.blueViolet)
         } label: {
             Image(systemName: controller.isObserving ? "scope" : "scope")
                 .symbolVariant(controller.isObserving ? .fill : .none)
@@ -29,6 +31,7 @@ struct BeaconApp: App {
             SettingsView()
                 .environmentObject(controller)
                 .environmentObject(appPreferences)
+                .tint(BeaconPalette.blueViolet)
                 .frame(width: 620, height: 450)
         }
     }

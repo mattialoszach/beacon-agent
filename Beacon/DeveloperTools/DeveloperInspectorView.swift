@@ -113,7 +113,7 @@ struct DeveloperInspectorView: View {
                             List(scene.elements, selection: $selectedElementID) { element in
                                 VStack(alignment: .leading, spacing: 3) {
                                     HStack {
-                                        Text(element.id).font(.caption.monospaced()).foregroundStyle(Color.accentColor)
+                                        Text(element.id).font(.caption.monospaced()).foregroundStyle(BeaconPalette.mediumPurple)
                                         Text(element.role ?? "Unknown role").font(.caption.monospaced())
                                         if element.focused { Text("FOCUSED").font(.caption2.bold()).foregroundStyle(.yellow) }
                                     }
@@ -130,7 +130,7 @@ struct DeveloperInspectorView: View {
                             List(scene.visualElements) { element in
                                 VStack(alignment: .leading, spacing: 3) {
                                     HStack {
-                                        Text(element.id).font(.caption.monospaced()).foregroundStyle(.purple)
+                                        Text(element.id).font(.caption.monospaced()).foregroundStyle(BeaconPalette.blueViolet)
                                         Text(element.kind.displayName.uppercased())
                                             .font(.caption2.bold())
                                             .foregroundStyle(.secondary)

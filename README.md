@@ -10,10 +10,11 @@ This repository contains the native v0.1 grounding prototype and verified multi-
 
 - Native SwiftUI/AppKit app with both a menu bar and normal window
 - Global Option + Space prompt positioned beside the pointer
+- A compact morphing glass bubble while Beacon captures, reasons, grounds, and verifies
 - One Ask Beacon entry point with local semantic, structural, and visible-scene intent classification
 - Focused-app Accessibility tree extraction with stable per-scene element IDs
 - One normalized, top-left coordinate space across Retina and multiple displays
-- Click-through rectangle, arrow, circle, and spotlight overlays
+- Click-through rectangle, circle, and spotlight overlays, with arrows that stop outside the target edge
 - Overlay target tracking while windows move
 - Local deterministic semantic element matching
 - Local Vision OCR plus rectangle, circle, icon, and freeform-shape detection

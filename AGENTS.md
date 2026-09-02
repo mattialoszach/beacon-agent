@@ -183,6 +183,18 @@ Avoid making the normal test suite depend on network access, screen-recording pe
 - Errors should be actionable and dismissible.
 - Developer Inspector should make perception and grounding failures easy to diagnose.
 
+### Brand color palette
+
+Use `BeaconPalette` for branded UI colors and gradients. The canonical palette is:
+
+- Lavender `#E6E6FA` — light ambient surfaces and highlights.
+- Thistle `#D8BFD8` — soft gradient transitions.
+- Plum `#DDA0DD` — warm secondary fills.
+- Medium Purple `#9370DB` — secondary accents.
+- Blue Violet `#8A2BE2` — primary interactive accent.
+
+Do not hard-code brand RGB values in views or introduce additional brand hues without an explicit palette update. Apple semantic colors and materials remain appropriate for labels, backgrounds, selection, accessibility contrast, destructive actions, status feedback, and developer-only diagnostics.
+
 ## Documentation and scope
 
 Update `README.md` and relevant files under `Docs/` when behavior, privacy boundaries, permissions, provider data flow, or supported features change.
