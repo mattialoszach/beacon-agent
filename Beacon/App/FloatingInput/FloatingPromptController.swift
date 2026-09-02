@@ -31,6 +31,7 @@ final class FloatingPromptController {
         panel.makeKeyAndOrderFront(nil)
         self.panel = panel
         self.presentation = presentation
+        focusPrompt(in: panel)
     }
 
     func showThinking(message: String, onCancel: @escaping () -> Void) {
@@ -97,11 +98,48 @@ final class FloatingPromptController {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         return panel
     }
+
+    private func focusPrompt(in panel: PromptPanel, attempt: Int = 0) {
+        let delay = attempt == 0 ? DispatchTimeInterval.milliseconds(0) : .milliseconds(30)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self, weak panel] in
+            guard let self,
+                  let panel,
+                  self.panel === panel,
+                  self.presentation?.mode == .prompt else { return }
+
+            panel.contentView?.layoutSubtreeIfNeeded()
+            panel.makeKey()
+            if let textField = panel.contentView.flatMap(PromptFocusResolver.editableTextField),
+               panel.makeFirstResponder(textField) {
+                return
+            }
+
+            guard attempt < 3 else { return }
+            self.focusPrompt(in: panel, attempt: attempt + 1)
+        }
+    }
 }
 
 private final class PromptPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+}
+
+enum PromptFocusResolver {
+    static func editableTextField(in root: NSView) -> NSTextField? {
+        if let textField = root as? NSTextField,
+           textField.isEditable,
+           textField.isEnabled {
+            return textField
+        }
+
+        for subview in root.subviews {
+            if let textField = editableTextField(in: subview) {
+                return textField
+            }
+        }
+        return nil
+    }
 }
 
 struct FloatingPromptLayout {
