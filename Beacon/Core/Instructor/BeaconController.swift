@@ -49,8 +49,9 @@ final class BeaconController: ObservableObject {
     private let grounder: any GroundingStrategy = HybridGrounder()
     private let shortcut = GlobalShortcutMonitor()
     private let requestModeClassifier = RequestModeClassifier()
-    private let prompt = FloatingPromptController()
-    private let overlay = OverlayController()
+    private let cursorPositionMonitor: CursorPositionMonitor
+    private let prompt: FloatingPromptController
+    private let overlay: OverlayController
     private var machine = InstructorStateMachine()
     private var preparedScene: ScreenScene?
     private var currentSetOfMarks: [SetOfMark] = []
@@ -73,6 +74,10 @@ final class BeaconController: ObservableObject {
     }
 
     init() {
+        let cursorPositionMonitor = CursorPositionMonitor()
+        self.cursorPositionMonitor = cursorPositionMonitor
+        prompt = FloatingPromptController(cursorPositionMonitor: cursorPositionMonitor)
+        overlay = OverlayController(cursorPositionMonitor: cursorPositionMonitor)
         privacySettings.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &settingsCancellables)

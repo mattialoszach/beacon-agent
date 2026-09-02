@@ -3,6 +3,18 @@ import XCTest
 @testable import Beacon
 
 final class CoordinateSpaceMapperTests: XCTestCase {
+    func testGlobalCursorMapsIntoTopLeftSwiftUICoordinatesWithNegativeDisplayOrigin() {
+        let frame = CGRect(x: -1440, y: 120, width: 1440, height: 900)
+
+        XCTAssertEqual(
+            CoordinateSpaceMapper.localSwiftUIPoint(
+                fromGlobalAppKit: CGPoint(x: -720, y: 795),
+                in: frame
+            ),
+            CGPoint(x: 720, y: 225)
+        )
+    }
+
     private let mapper = CoordinateSpaceMapper(
         virtualDesktopBounds: CGRect(x: -1440, y: 0, width: 3360, height: 1080),
         appKitMainScreenMaxY: 1080

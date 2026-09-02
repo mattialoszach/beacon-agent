@@ -3,10 +3,19 @@ import SwiftUI
 
 @MainActor
 final class FloatingPromptController {
+    private let cursorPositionMonitor: CursorPositionMonitor
     private var panel: PromptPanel?
     private var presentation: FloatingPromptPresentation?
     private var statusEscapeMonitor: Any?
     private var localStatusEscapeMonitor: Any?
+
+    init() {
+        cursorPositionMonitor = CursorPositionMonitor()
+    }
+
+    init(cursorPositionMonitor: CursorPositionMonitor) {
+        self.cursorPositionMonitor = cursorPositionMonitor
+    }
 
     func show(
         onSubmit: @escaping (String) -> Void,
@@ -28,7 +37,9 @@ final class FloatingPromptController {
             }
         )
         panel.contentView = NSHostingView(rootView: FloatingPromptView(
-            presentation: presentation
+            presentation: presentation,
+            panelFrame: panel.frame,
+            cursorPositionMonitor: cursorPositionMonitor
         ))
         panel.makeKeyAndOrderFront(nil)
         self.panel = panel
@@ -66,7 +77,9 @@ final class FloatingPromptController {
             }
         )
         panel.contentView = NSHostingView(rootView: FloatingPromptView(
-            presentation: presentation
+            presentation: presentation,
+            panelFrame: panel.frame,
+            cursorPositionMonitor: cursorPositionMonitor
         ))
         self.panel = panel
         self.presentation = presentation
@@ -252,11 +265,23 @@ private final class FloatingPromptPresentation: ObservableObject {
 private struct FloatingPromptView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var presentation: FloatingPromptPresentation
+    let panelFrame: CGRect
+    @ObservedObject var cursorPositionMonitor: CursorPositionMonitor
 
     @State private var question = ""
     @FocusState private var focused: Bool
 
     private var isThinking: Bool { presentation.mode.isStatus }
+    private var isHoveringStatus: Bool {
+        guard isThinking else { return false }
+        let cursor = CoordinateSpaceMapper.localSwiftUIPoint(
+            fromGlobalAppKit: cursorPositionMonitor.location,
+            in: panelFrame
+        )
+        return FloatingPromptLayout.surfaceFrame(isThinking: true)
+            .insetBy(dx: -10, dy: -10)
+            .contains(cursor)
+    }
 
     var body: some View {
         ZStack {
@@ -289,6 +314,8 @@ private struct FloatingPromptView: View {
         }
         .onExitCommand(perform: presentation.onCancel)
         .tint(BeaconPalette.blueViolet)
+        .opacity(isHoveringStatus ? 0.16 : 1)
+        .animation(.easeOut(duration: 0.12), value: isHoveringStatus)
     }
 
     private var surface: some View {
@@ -303,7 +330,7 @@ private struct FloatingPromptView: View {
                 shape.fill(
                     LinearGradient(
                         colors: [
-                            BeaconPalette.lavender.opacity(isThinking ? 0.22 : 0.12),
+                            BeaconPalette.lavender.opacity(0.12),
                             BeaconPalette.thistle.opacity(0.04)
                         ],
                         startPoint: .topLeading,

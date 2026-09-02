@@ -58,6 +58,15 @@ struct CoordinateSpaceMapper: Equatable, Sendable {
         self.appKitMainScreenMaxY = appKitMainScreenMaxY
     }
 
+    /// Converts a global AppKit cursor point into a top-left SwiftUI point inside
+    /// a particular window or screen frame.
+    static func localSwiftUIPoint(fromGlobalAppKit point: CGPoint, in frame: CGRect) -> CGPoint {
+        CGPoint(
+            x: point.x - frame.minX,
+            y: frame.maxY - point.y
+        )
+    }
+
     func normalizeAXRect(_ rect: CGRect) -> NormalizedRect? {
         guard virtualDesktopBounds.width > 0, virtualDesktopBounds.height > 0,
               rect.width >= 0, rect.height >= 0 else { return nil }

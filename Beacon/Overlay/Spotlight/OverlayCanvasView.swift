@@ -5,9 +5,12 @@ struct OverlayCanvasView: View {
     let presentation: OverlayController.Presentation
     let screenFrame: CGRect
     let mapper: CoordinateSpaceMapper
+    @ObservedObject var cursorPositionMonitor: CursorPositionMonitor
 
     var body: some View {
         GeometryReader { proxy in
+            let fadesForCursor = shouldFadeForCursor(in: proxy.size)
+
             ZStack(alignment: .topLeading) {
                 if presentation.style == .spotlight, let targetRect {
                     Canvas { context, size in
@@ -37,6 +40,8 @@ struct OverlayCanvasView: View {
                     }
                 }
             }
+            .opacity(fadesForCursor ? 0.16 : 1)
+            .animation(.easeOut(duration: 0.12), value: fadesForCursor)
         }
         .ignoresSafeArea()
     }
@@ -53,6 +58,31 @@ struct OverlayCanvasView: View {
             width: global.width,
             height: global.height
         )
+    }
+
+    private func shouldFadeForCursor(in availableSize: CGSize) -> Bool {
+        guard let targetRect else { return false }
+        let cursor = CoordinateSpaceMapper.localSwiftUIPoint(
+            fromGlobalAppKit: cursorPositionMonitor.location,
+            in: screenFrame
+        )
+
+        if targetRect.insetBy(dx: -18, dy: -18).contains(cursor) {
+            return true
+        }
+
+        let callout = InstructionCalloutGeometry.layout(
+            text: presentation.instruction,
+            target: targetRect,
+            availableSize: availableSize
+        )
+        if callout.frame.insetBy(dx: -8, dy: -8).contains(cursor) {
+            return true
+        }
+
+        return presentation.style == .arrow
+            && GuidanceArrowGeometry.layout(target: targetRect, availableSize: availableSize)?
+                .hoverBounds.contains(cursor) == true
     }
 }
 
@@ -79,14 +109,7 @@ private struct GuidanceArrow: View {
             )
             context.stroke(
                 shaft,
-                with: .linearGradient(
-                    Gradient(colors: [
-                        BeaconPalette.mediumPurple.opacity(0.82),
-                        BeaconPalette.blueViolet
-                    ]),
-                    startPoint: geometry.start,
-                    endPoint: geometry.end
-                ),
+                with: .color(BeaconPalette.blueViolet),
                 style: StrokeStyle(lineWidth: 5, lineCap: .round)
             )
 
@@ -133,6 +156,20 @@ struct GuidanceArrowGeometry: Equatable {
     let start: CGPoint
     let control: CGPoint
     let end: CGPoint
+
+    var hoverBounds: CGRect {
+        let minX = min(start.x, control.x, end.x)
+        let maxX = max(start.x, control.x, end.x)
+        let minY = min(start.y, control.y, end.y)
+        let maxY = max(start.y, control.y, end.y)
+        return CGRect(
+            x: minX,
+            y: minY,
+            width: max(1, maxX - minX),
+            height: max(1, maxY - minY)
+        )
+        .insetBy(dx: -18, dy: -18)
+    }
 
     static func layout(
         target: CGRect,
@@ -207,6 +244,51 @@ struct GuidanceArrowGeometry: Equatable {
     }
 }
 
+struct InstructionCalloutGeometry: Equatable {
+    let width: CGFloat
+    let height: CGFloat
+    let position: CGPoint
+
+    var frame: CGRect {
+        CGRect(
+            x: position.x - width / 2,
+            y: position.y - height / 2,
+            width: width,
+            height: height
+        )
+    }
+
+    static func layout(
+        text: String,
+        target: CGRect,
+        availableSize: CGSize
+    ) -> InstructionCalloutGeometry {
+        let width = max(180, min(420, availableSize.width - 24))
+        let charactersPerLine = max(18, Int((width - 58) / 7))
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).reduce(0) { count, line in
+            count + max(1, Int(ceil(Double(line.count) / Double(charactersPerLine))))
+        }
+        let height = 38 + CGFloat(lines * 18)
+        let x = min(
+            max(width / 2 + 12, target.midX),
+            availableSize.width - width / 2 - 12
+        )
+        let spacing: CGFloat = 16
+        let below = target.maxY + spacing + height / 2
+        let above = target.minY - spacing - height / 2
+        let preferredY = below + height / 2 + 12 <= availableSize.height ? below : above
+        let y = min(
+            max(height / 2 + 12, preferredY),
+            availableSize.height - height / 2 - 12
+        )
+        return InstructionCalloutGeometry(
+            width: width,
+            height: height,
+            position: CGPoint(x: x, y: y)
+        )
+    }
+}
+
 private struct TargetHighlight: View {
     let style: OverlayStyle
 
@@ -227,32 +309,12 @@ private struct InstructionCallout: View {
     let target: CGRect
     let availableSize: CGSize
 
-    private var calloutWidth: CGFloat {
-        max(180, min(420, availableSize.width - 24))
-    }
-
-    private var estimatedHeight: CGFloat {
-        let charactersPerLine = max(18, Int((calloutWidth - 58) / 7))
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).reduce(0) { count, line in
-            count + max(1, Int(ceil(Double(line.count) / Double(charactersPerLine))))
-        }
-        return 38 + CGFloat(lines * 18)
-    }
-
-    private var position: CGPoint {
-        let x = min(
-            max(calloutWidth / 2 + 12, target.midX),
-            availableSize.width - calloutWidth / 2 - 12
+    private var geometry: InstructionCalloutGeometry {
+        InstructionCalloutGeometry.layout(
+            text: text,
+            target: target,
+            availableSize: availableSize
         )
-        let spacing: CGFloat = 16
-        let below = target.maxY + spacing + estimatedHeight / 2
-        let above = target.minY - spacing - estimatedHeight / 2
-        let preferredY = below + estimatedHeight / 2 + 12 <= availableSize.height ? below : above
-        let y = min(
-            max(estimatedHeight / 2 + 12, preferredY),
-            availableSize.height - estimatedHeight / 2 - 12
-        )
-        return CGPoint(x: x, y: y)
     }
 
     var body: some View {
@@ -267,11 +329,11 @@ private struct InstructionCallout: View {
         .foregroundStyle(.primary)
         .padding(.horizontal, 13)
         .padding(.vertical, 10)
-        .frame(width: calloutWidth, alignment: .leading)
+        .frame(width: geometry.width, alignment: .leading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.2)))
         .shadow(radius: 12)
-        .position(position)
+        .position(geometry.position)
     }
 }
 

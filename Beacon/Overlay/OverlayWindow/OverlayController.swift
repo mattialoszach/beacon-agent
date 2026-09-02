@@ -11,9 +11,18 @@ final class OverlayController {
     }
 
     private var panels: [NSPanel] = []
+    private let cursorPositionMonitor: CursorPositionMonitor
     private var escapeMonitor: Any?
     private(set) var presentation: Presentation?
     var onDismiss: (() -> Void)?
+
+    init() {
+        cursorPositionMonitor = CursorPositionMonitor()
+    }
+
+    init(cursorPositionMonitor: CursorPositionMonitor) {
+        self.cursorPositionMonitor = cursorPositionMonitor
+    }
 
     func showInstruction(_ instruction: VisualInstruction) {
         show(Presentation(
@@ -118,7 +127,8 @@ final class OverlayController {
         NSHostingView(rootView: OverlayCanvasView(
             presentation: presentation,
             screenFrame: screenFrame,
-            mapper: mapper
+            mapper: mapper,
+            cursorPositionMonitor: cursorPositionMonitor
         ))
     }
 }

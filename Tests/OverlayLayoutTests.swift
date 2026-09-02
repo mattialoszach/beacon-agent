@@ -55,6 +55,29 @@ final class OverlayLayoutTests: XCTestCase {
         ))
     }
 
+    func testArrowHoverBoundsCoverTheCompleteCurve() throws {
+        let geometry = try XCTUnwrap(GuidanceArrowGeometry.layout(
+            target: CGRect(x: 350, y: 250, width: 100, height: 100),
+            availableSize: CGSize(width: 800, height: 600)
+        ))
+
+        XCTAssertTrue(geometry.hoverBounds.contains(geometry.start))
+        XCTAssertTrue(geometry.hoverBounds.contains(geometry.control))
+        XCTAssertTrue(geometry.hoverBounds.contains(geometry.end))
+    }
+
+    func testCalloutGeometryStaysInsideTheAvailableArea() {
+        let availableSize = CGSize(width: 800, height: 600)
+        let geometry = InstructionCalloutGeometry.layout(
+            text: "Open the Format menu, then choose Font.",
+            target: CGRect(x: 350, y: 250, width: 100, height: 40),
+            availableSize: availableSize
+        )
+
+        XCTAssertTrue(CGRect(origin: .zero, size: availableSize).contains(geometry.frame))
+        XCTAssertTrue(geometry.frame.contains(geometry.position))
+    }
+
     private func distance(from point: CGPoint, to rect: CGRect) -> CGFloat {
         let xDistance = max(max(rect.minX - point.x, 0), point.x - rect.maxX)
         let yDistance = max(max(rect.minY - point.y, 0), point.y - rect.maxY)

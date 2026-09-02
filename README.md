@@ -15,6 +15,7 @@ This repository contains the native v0.1 grounding prototype and verified multi-
 - Focused-app Accessibility tree extraction with stable per-scene element IDs
 - One normalized, top-left coordinate space across Retina and multiple displays
 - Click-through rectangle, circle, and spotlight overlays, with arrows that stop outside the target edge
+- Solid-color guidance arrows and a live proximity fade that reveals the interface beneath nearby Beacon guidance
 - Focus-safe teacher status HUD that explains when Beacon is checking or waiting for the user
 - Stale-scene protection that pauses vanished targets and resumes after menus or windows are restored
 - Overlay target tracking while windows move

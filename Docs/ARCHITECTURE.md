@@ -26,7 +26,7 @@ It converts:
 - normalized rectangles back to global AppKit rectangles, including one deliberate Y-axis inversion;
 - capture pixels into the normalized bounds of their source display.
 
-Overlay windows are one transparent, click-through `NSPanel` per `NSScreen`. Each view converts the global AppKit target to screen-local SwiftUI geometry. Unit tests cover negative display origins, round trips, screenshot mapping, and Y inversion.
+Overlay windows are one transparent, click-through `NSPanel` per `NSScreen`. Each view converts the global AppKit target to screen-local SwiftUI geometry. Guidance overlays and non-interactive status HUDs use live cursor proximity to fade out of the way so the underlying interface remains readable beneath the pointer; the interactive question field intentionally does not fade. Unit tests cover negative display origins, cursor mapping, round trips, screenshot mapping, and Y inversion.
 
 ## Scene capture
 
