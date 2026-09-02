@@ -138,20 +138,8 @@ final class FloatingPromptController {
         panel.acceptsKeyEvents = false
         panel.ignoresMouseEvents = true
         if panel.isKeyWindow { panel.resignKey() }
-        moveToStatusLocation(panel)
         panel.orderFrontRegardless()
         installStatusEscapeMonitors()
-    }
-
-    private func moveToStatusLocation(_ panel: NSPanel) {
-        let screen = panel.screen
-            ?? NSScreen.screens.first(where: { $0.frame.intersects(panel.frame) })
-            ?? NSScreen.main
-        guard let visible = screen?.visibleFrame else { return }
-        panel.setFrameOrigin(CGPoint(
-            x: visible.midX - panel.frame.width / 2,
-            y: visible.minY + 12
-        ))
     }
 
     private func installStatusEscapeMonitors() {
@@ -201,10 +189,13 @@ enum PromptFocusResolver {
 
 struct FloatingPromptLayout {
     static let panelSize = CGSize(width: 440, height: 176)
-    static let promptSize = CGSize(width: 408, height: 142)
+    static let promptSize = CGSize(width: 408, height: 114)
     static let thinkingSize = CGSize(width: 380, height: 110)
+    static let outerPadding: CGFloat = 16
+    static let inputPadding: CGFloat = 12
+    static let maximumQuestionLines = 3
     static let promptOffsetY: CGFloat = -9
-    static let thinkingOffsetY: CGFloat = 22
+    static let thinkingOffsetY = promptOffsetY
 
     static func surfaceFrame(isThinking: Bool) -> CGRect {
         let size = isThinking ? thinkingSize : promptSize
@@ -269,30 +260,15 @@ private struct FloatingPromptView: View {
 
     var body: some View {
         ZStack {
-            surface
-                .opacity(isThinking ? 0 : 1)
-                .animation(
-                    reduceMotion
-                        ? nil
-                        : .easeInOut(duration: 0.2).delay(isThinking ? 0.26 : 0),
-                    value: isThinking
-                )
-            promptContents
-            TeacherStatusView(mode: presentation.mode, message: presentation.message)
-                .opacity(isThinking ? 1 : 0)
-                .blur(radius: isThinking ? 0 : 2.5)
-                .accessibilityHidden(!isThinking)
-                .animation(
-                    reduceMotion
-                        ? nil
-                        : .easeInOut(duration: 0.28).delay(isThinking ? 0.2 : 0),
-                    value: isThinking
-                )
+            if isThinking {
+                TeacherStatusView(mode: presentation.mode, message: presentation.message)
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+            } else {
+                promptContents
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+            }
         }
-        .frame(
-            width: isThinking ? FloatingPromptLayout.thinkingSize.width : FloatingPromptLayout.promptSize.width,
-            height: isThinking ? FloatingPromptLayout.thinkingSize.height : FloatingPromptLayout.promptSize.height
-        )
+        .background { surface }
         .clipShape(RoundedRectangle(cornerRadius: isThinking ? 20 : 18, style: .continuous))
         .shadow(
             color: .black.opacity(isThinking ? 0.2 : 0.24),
@@ -369,9 +345,10 @@ private struct FloatingPromptView: View {
             }
 
             HStack(spacing: 10) {
-                TextField("What do you want to know or do?", text: $question)
+                TextField("What do you want to know or do?", text: $question, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.system(size: 17))
+                    .lineLimit(1...FloatingPromptLayout.maximumQuestionLines)
                     .focused($focused)
                     .onSubmit(submit)
                 Button(action: submit) {
@@ -385,21 +362,13 @@ private struct FloatingPromptView: View {
                 .disabled(question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .opacity(question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.42 : 1)
             }
-            .padding(12)
+            .padding(FloatingPromptLayout.inputPadding)
             .background(.black.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
 
-            Text("Return to send  ·  Esc to dismiss  ·  Beacon never clicks for you")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
-        .padding(16)
-        .frame(width: FloatingPromptLayout.promptSize.width, height: FloatingPromptLayout.promptSize.height)
-        .opacity(isThinking ? 0 : 1)
-        .scaleEffect(isThinking ? 0.94 : 1)
-        .blur(radius: isThinking ? 3 : 0)
-        .allowsHitTesting(!isThinking)
-        .accessibilityHidden(isThinking)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: isThinking)
+        .padding(FloatingPromptLayout.outerPadding)
+        .frame(width: FloatingPromptLayout.promptSize.width)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private func submit() {
