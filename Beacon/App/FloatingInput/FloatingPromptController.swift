@@ -8,6 +8,7 @@ final class FloatingPromptController {
     private var presentation: FloatingPromptPresentation?
     private var statusEscapeMonitor: Any?
     private var localStatusEscapeMonitor: Any?
+    private var isMonitoringCursor = false
 
     init() {
         cursorPositionMonitor = CursorPositionMonitor()
@@ -22,6 +23,7 @@ final class FloatingPromptController {
         onCancel: @escaping () -> Void
     ) {
         close()
+        beginCursorMonitoring()
         let panel = makePanel()
         let presentation = FloatingPromptPresentation(
             onSubmit: { [weak self] question in
@@ -67,6 +69,7 @@ final class FloatingPromptController {
         }
 
         let panel = makePanel()
+        beginCursorMonitoring()
         let presentation = FloatingPromptPresentation(
             mode: mode,
             message: message,
@@ -95,6 +98,7 @@ final class FloatingPromptController {
         panel?.orderOut(nil)
         panel = nil
         presentation = nil
+        endCursorMonitoring()
     }
 
     private func makePanel() -> PromptPanel {
@@ -173,6 +177,18 @@ final class FloatingPromptController {
         if let localStatusEscapeMonitor { NSEvent.removeMonitor(localStatusEscapeMonitor) }
         statusEscapeMonitor = nil
         localStatusEscapeMonitor = nil
+    }
+
+    private func beginCursorMonitoring() {
+        guard !isMonitoringCursor else { return }
+        isMonitoringCursor = true
+        cursorPositionMonitor.beginMonitoring()
+    }
+
+    private func endCursorMonitoring() {
+        guard isMonitoringCursor else { return }
+        isMonitoringCursor = false
+        cursorPositionMonitor.endMonitoring()
     }
 }
 

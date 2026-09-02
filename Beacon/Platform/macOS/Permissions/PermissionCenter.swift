@@ -2,7 +2,7 @@ import AVFoundation
 import CoreGraphics
 import Foundation
 
-enum PermissionKind: String, CaseIterable, Identifiable {
+enum PermissionKind: String, CaseIterable, Identifiable, Hashable, Sendable {
     case accessibility = "Accessibility"
     case screenRecording = "Screen Recording"
     case microphone = "Microphone (future)"

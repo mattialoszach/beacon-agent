@@ -12,6 +12,7 @@ Beacon's default path is local and Accessibility-first. No account, API key, scr
 - Temporary freshness and verification frames stay in memory and are never sent to a model.
 - Excluded applications are removed from ScreenCaptureKit at capture time, including when their windows share a display with the active app.
 - Overlay and prompt windows are rendered locally and never become model drawing input.
+- Local analysis captures are resolution-bounded in memory; the Privacy screen still shows the exact redacted image eligible for a consented visual request.
 
 ## Cloud boundary
 

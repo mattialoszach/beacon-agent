@@ -17,6 +17,8 @@ enum ScreenCaptureError: LocalizedError {
 }
 
 struct ScreenCaptureService {
+    private let maximumCaptureDimension = 1_920
+
     func captureDisplay(
         containing point: CGPoint? = nil,
         excludingBundleIdentifiers: Set<String> = []
@@ -37,8 +39,13 @@ struct ScreenCaptureService {
             exceptingWindows: []
         )
         let configuration = SCStreamConfiguration()
-        configuration.width = display.width
-        configuration.height = display.height
+        let dimensions = ScreenCaptureDimensions.fitting(
+            pixelWidth: display.width,
+            pixelHeight: display.height,
+            maximumDimension: maximumCaptureDimension
+        )
+        configuration.width = dimensions.width
+        configuration.height = dimensions.height
         configuration.showsCursor = false
         configuration.captureResolution = .best
         let image = try await SCScreenshotManager.captureImage(
@@ -81,5 +88,29 @@ struct ScreenCaptureService {
         CGImageDestinationAddImage(destination, image, nil)
         guard CGImageDestinationFinalize(destination) else { throw ScreenCaptureError.encodingFailed }
         return data as Data
+    }
+}
+
+struct ScreenCaptureDimensions: Equatable, Sendable {
+    let width: Int
+    let height: Int
+
+    static func fitting(
+        pixelWidth: Int,
+        pixelHeight: Int,
+        maximumDimension: Int
+    ) -> ScreenCaptureDimensions {
+        guard pixelWidth > 0, pixelHeight > 0, maximumDimension > 0 else {
+            return ScreenCaptureDimensions(width: max(1, pixelWidth), height: max(1, pixelHeight))
+        }
+        let longestEdge = max(pixelWidth, pixelHeight)
+        guard longestEdge > maximumDimension else {
+            return ScreenCaptureDimensions(width: pixelWidth, height: pixelHeight)
+        }
+        let scale = Double(maximumDimension) / Double(longestEdge)
+        return ScreenCaptureDimensions(
+            width: max(1, Int((Double(pixelWidth) * scale).rounded())),
+            height: max(1, Int((Double(pixelHeight) * scale).rounded()))
+        )
     }
 }

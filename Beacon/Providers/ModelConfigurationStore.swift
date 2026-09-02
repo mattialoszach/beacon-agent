@@ -43,9 +43,12 @@ final class ModelConfigurationStore: ObservableObject {
     }
     @Published var apiKey: String = ""
     @Published private(set) var hasStoredAPIKey = false
+    @Published private(set) var isLoadingAPIKey = false
 
     private let defaults: UserDefaults
     private let apiKeyStorage: any APIKeyStorage
+    private var hasLoadedAPIKey = false
+    private var apiKeyLoadTask: Task<String?, Never>?
 
     init(
         defaults: UserDefaults = .standard,
@@ -61,9 +64,6 @@ final class ModelConfigurationStore: ObservableObject {
         provider = savedProvider == .openAI && usedLegacyLocalOnlyMode ? .accessibility : savedProvider
         let savedOpenAIModel = defaults.string(forKey: Keys.openAIModel)
         openAIModel = savedOpenAIModel.flatMap(OpenAIModelChoice.init(rawValue:)) ?? .terra
-        apiKey = apiKeyStorage.read() ?? ""
-        hasStoredAPIKey = !apiKey.isEmpty
-
         // Processing modes other than Local Only never affected routing. Cloud consent is
         // now represented by the single privacy setting, so remove the obsolete value.
         defaults.removeObject(forKey: Keys.legacyProcessingMode)
@@ -75,15 +75,45 @@ final class ModelConfigurationStore: ObservableObject {
         }
     }
 
-    func saveAPIKey() throws {
+    func loadAPIKeyIfNeeded() async {
+        guard !hasLoadedAPIKey else { return }
+        let task: Task<String?, Never>
+        if let apiKeyLoadTask {
+            task = apiKeyLoadTask
+        } else {
+            let storage = apiKeyStorage
+            let newTask = Task.detached(priority: .utility) { storage.read() }
+            apiKeyLoadTask = newTask
+            isLoadingAPIKey = true
+            task = newTask
+        }
+        let storedKey = await task.value ?? ""
+        if apiKey.isEmpty {
+            apiKey = storedKey
+        }
+        hasStoredAPIKey = !storedKey.isEmpty
+        hasLoadedAPIKey = true
+        isLoadingAPIKey = false
+        apiKeyLoadTask = nil
+    }
+
+    func saveAPIKey() async throws {
+        await loadAPIKeyIfNeeded()
         let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        try apiKeyStorage.write(trimmedAPIKey)
+        let storage = apiKeyStorage
+        try await Task.detached(priority: .userInitiated) {
+            try storage.write(trimmedAPIKey)
+        }.value
         apiKey = trimmedAPIKey
         hasStoredAPIKey = !trimmedAPIKey.isEmpty
     }
 
-    func removeAPIKey() throws {
-        try apiKeyStorage.delete()
+    func removeAPIKey() async throws {
+        await loadAPIKeyIfNeeded()
+        let storage = apiKeyStorage
+        try await Task.detached(priority: .userInitiated) {
+            try storage.delete()
+        }.value
         apiKey = ""
         hasStoredAPIKey = false
     }
@@ -95,7 +125,7 @@ final class ModelConfigurationStore: ObservableObject {
     }
 }
 
-protocol APIKeyStorage {
+protocol APIKeyStorage: Sendable {
     func read() -> String?
     func write(_ value: String) throws
     func delete() throws

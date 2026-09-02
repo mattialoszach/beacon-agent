@@ -13,6 +13,7 @@ final class OverlayController {
     private var panels: [NSPanel] = []
     private let cursorPositionMonitor: CursorPositionMonitor
     private var escapeMonitor: Any?
+    private var isMonitoringCursor = false
     private(set) var presentation: Presentation?
     var onDismiss: (() -> Void)?
 
@@ -68,6 +69,7 @@ final class OverlayController {
         presentation = nil
         if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) }
         escapeMonitor = nil
+        endCursorMonitoring()
     }
 
     private func show(_ presentation: Presentation) {
@@ -78,6 +80,8 @@ final class OverlayController {
             render(presentation, mapper: mapper)
             return
         }
+
+        beginCursorMonitoring()
 
         for screen in NSScreen.screens {
             let panel = ClickThroughPanel(
@@ -130,6 +134,18 @@ final class OverlayController {
             mapper: mapper,
             cursorPositionMonitor: cursorPositionMonitor
         ))
+    }
+
+    private func beginCursorMonitoring() {
+        guard !isMonitoringCursor else { return }
+        isMonitoringCursor = true
+        cursorPositionMonitor.beginMonitoring()
+    }
+
+    private func endCursorMonitoring() {
+        guard isMonitoringCursor else { return }
+        isMonitoringCursor = false
+        cursorPositionMonitor.endMonitoring()
     }
 }
 

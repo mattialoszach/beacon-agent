@@ -3,13 +3,7 @@ import SwiftUI
 
 struct PrivacyView: View {
     @EnvironmentObject private var controller: BeaconController
-
-    private var runningApps: [NSRunningApplication] {
-        NSWorkspace.shared.runningApplications
-            .filter { $0.activationPolicy == .regular && $0.bundleIdentifier != Bundle.main.bundleIdentifier }
-            .uniqued(by: \.bundleIdentifier)
-            .sorted { ($0.localizedName ?? "") < ($1.localizedName ?? "") }
-    }
+    @State private var runningApps: [NSRunningApplication] = []
 
     var body: some View {
         Form {
@@ -27,12 +21,12 @@ struct PrivacyView: View {
 
             if controller.privacySettings.cloudVisionEnabled {
                 Section("Exact outbound visual preview") {
-                    if let snapshot = controller.outboundImagePreview,
-                       let image = NSImage(data: snapshot.pngData) {
-                        Image(nsImage: image)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxWidth: .infinity, maxHeight: 220)
+                    if let snapshot = controller.outboundImagePreview {
+                        ScreenSnapshotImageView(
+                            snapshot: snapshot,
+                            variant: "privacy-preview",
+                            maximumHeight: 220
+                        )
                             .accessibilityLabel("Exact outbound redacted visual preview")
                         Text("This locally redacted, numbered image was prepared for the latest OpenAI visual request. It is never used for excluded applications.")
                             .font(.caption)
@@ -69,6 +63,14 @@ struct PrivacyView: View {
         }
         .formStyle(.grouped)
         .navigationTitle("Privacy")
+        .onAppear(perform: refreshRunningApplications)
+    }
+
+    private func refreshRunningApplications() {
+        runningApps = NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular && $0.bundleIdentifier != Bundle.main.bundleIdentifier }
+            .uniqued(by: \.bundleIdentifier)
+            .sorted { ($0.localizedName ?? "") < ($1.localizedName ?? "") }
     }
 }
 

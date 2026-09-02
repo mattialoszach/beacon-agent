@@ -86,14 +86,15 @@ final class SettingsStoreTests: XCTestCase {
         }
     }
 
-    func testStoredAPIKeyCanBeRemoved() throws {
-        try withDefaults { defaults in
+    func testStoredAPIKeyCanBeRemoved() async throws {
+        try await withAsyncDefaults { defaults in
             let storage = InMemoryAPIKeyStorage(value: "sk-test-key")
             let store = ModelConfigurationStore(defaults: defaults, apiKeyStorage: storage)
+            await store.loadAPIKeyIfNeeded()
 
             XCTAssertTrue(store.hasStoredAPIKey)
 
-            try store.removeAPIKey()
+            try await store.removeAPIKey()
 
             XCTAssertNil(storage.value)
             XCTAssertEqual(store.apiKey, "")
@@ -101,13 +102,35 @@ final class SettingsStoreTests: XCTestCase {
         }
     }
 
-    func testFailedAPIKeyRemovalKeepsInMemoryCredentialState() throws {
-        try withDefaults { defaults in
+    func testFailedAPIKeyRemovalKeepsInMemoryCredentialState() async {
+        await withAsyncDefaults { defaults in
             let storage = InMemoryAPIKeyStorage(value: "sk-test-key")
             storage.deleteError = TestCredentialError.deleteFailed
             let store = ModelConfigurationStore(defaults: defaults, apiKeyStorage: storage)
+            await store.loadAPIKeyIfNeeded()
 
-            XCTAssertThrowsError(try store.removeAPIKey())
+            do {
+                try await store.removeAPIKey()
+                XCTFail("Expected credential deletion to fail")
+            } catch {
+                XCTAssertEqual(error as? TestCredentialError, .deleteFailed)
+            }
+            XCTAssertEqual(store.apiKey, "sk-test-key")
+            XCTAssertTrue(store.hasStoredAPIKey)
+        }
+    }
+
+    func testAPIKeyReadIsDeferredUntilRequested() async {
+        await withAsyncDefaults { defaults in
+            let storage = InMemoryAPIKeyStorage(value: "sk-test-key")
+            let store = ModelConfigurationStore(defaults: defaults, apiKeyStorage: storage)
+
+            XCTAssertEqual(storage.readCount, 0)
+            XCTAssertFalse(store.hasStoredAPIKey)
+
+            await store.loadAPIKeyIfNeeded()
+
+            XCTAssertEqual(storage.readCount, 1)
             XCTAssertEqual(store.apiKey, "sk-test-key")
             XCTAssertTrue(store.hasStoredAPIKey)
         }
@@ -119,18 +142,27 @@ final class SettingsStoreTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suiteName) }
         try body(defaults)
     }
+
+    private func withAsyncDefaults(_ body: (UserDefaults) async throws -> Void) async rethrows {
+        let suiteName = "SettingsStoreTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        try await body(defaults)
+    }
 }
 
-private final class InMemoryAPIKeyStorage: APIKeyStorage {
+private final class InMemoryAPIKeyStorage: APIKeyStorage, @unchecked Sendable {
     var value: String?
     var deleteError: Error?
+    private(set) var readCount = 0
 
     init(value: String? = nil) {
         self.value = value
     }
 
     func read() -> String? {
-        value
+        readCount += 1
+        return value
     }
 
     func write(_ value: String) throws {
@@ -143,6 +175,6 @@ private final class InMemoryAPIKeyStorage: APIKeyStorage {
     }
 }
 
-private enum TestCredentialError: Error {
+private enum TestCredentialError: Error, Equatable {
     case deleteFailed
 }

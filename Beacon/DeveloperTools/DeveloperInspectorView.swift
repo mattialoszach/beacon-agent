@@ -18,7 +18,12 @@ struct DeveloperInspectorView: View {
                     Label("Draw All Elements", systemImage: "viewfinder")
                 }
                 .disabled(controller.currentScene?.elements.isEmpty != false)
-                Button { controller.rebuildSetOfMarksPreview(); showSetOfMarks = true } label: {
+                Button {
+                    Task {
+                        await controller.rebuildSetOfMarksPreview()
+                        showSetOfMarks = true
+                    }
+                } label: {
                     Label("Set of Marks", systemImage: "number.square")
                 }
                 .disabled(controller.currentScene?.screenshot == nil)
@@ -40,12 +45,12 @@ struct DeveloperInspectorView: View {
                             let selectedSnapshot = showSetOfMarks
                                 ? controller.setOfMarksPreview?.snapshot
                                 : scene.screenshot
-                            if let snapshot = selectedSnapshot,
-                               let image = NSImage(data: snapshot.pngData) {
-                                Image(nsImage: image)
-                                    .resizable()
-                                    .scaledToFit()
-                                    .frame(maxWidth: .infinity, maxHeight: 270)
+                            if let snapshot = selectedSnapshot {
+                                ScreenSnapshotImageView(
+                                    snapshot: snapshot,
+                                    variant: showSetOfMarks ? "inspector-marks" : "inspector-redacted",
+                                    maximumHeight: 270
+                                )
                                 HStack {
                                     if showSetOfMarks {
                                         Label("\(controller.setOfMarksPreview?.marks.count ?? 0) numbered candidates", systemImage: "number.square")

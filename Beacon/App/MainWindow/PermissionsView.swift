@@ -2,24 +2,26 @@ import SwiftUI
 
 struct PermissionsView: View {
     @EnvironmentObject private var controller: BeaconController
-    @State private var refreshID = UUID()
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var grantedPermissions = Set<PermissionKind>()
 
     var body: some View {
         Form {
             Section {
                 ForEach(PermissionKind.allCases) { permission in
+                    let isGranted = grantedPermissions.contains(permission)
                     HStack {
-                        Image(systemName: PermissionCenter().isGranted(permission) ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                            .foregroundStyle(PermissionCenter().isGranted(permission) ? .green : .orange)
+                        Image(systemName: isGranted ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                            .foregroundStyle(isGranted ? .green : .orange)
                         VStack(alignment: .leading) {
                             Text(permission.rawValue)
                             Text(detail(permission)).font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
-                        if !PermissionCenter().isGranted(permission) {
+                        if !isGranted {
                             Button("Grant Access") {
                                 controller.requestPermission(permission)
-                                refreshID = UUID()
+                                refreshPermissions()
                             }
                         }
                     }
@@ -31,9 +33,12 @@ struct PermissionsView: View {
                 Text("Beacon only observes after an explicit shortcut or while verifying a visible guide step. It does not continuously record your screen.")
             }
         }
-        .id(refreshID)
         .formStyle(.grouped)
         .navigationTitle("Permissions")
+        .onAppear(perform: refreshPermissions)
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { refreshPermissions() }
+        }
     }
 
     private func detail(_ permission: PermissionKind) -> String {
@@ -42,5 +47,10 @@ struct PermissionsView: View {
         case .screenRecording: "Creates the local privacy preview and visual fallback input."
         case .microphone: "Reserved for a later voice input feature."
         }
+    }
+
+    private func refreshPermissions() {
+        let center = PermissionCenter()
+        grantedPermissions = Set(PermissionKind.allCases.filter(center.isGranted))
     }
 }

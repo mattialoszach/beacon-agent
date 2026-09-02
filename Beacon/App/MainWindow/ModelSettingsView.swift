@@ -47,12 +47,14 @@ struct ModelSettingsView: View {
 
                         HStack(spacing: 8) {
                             Button("Save in Keychain") {
-                                do {
-                                    try controller.modelSettings.saveAPIKey()
-                                    keyStatus = "Saved"
-                                } catch { keyStatus = error.localizedDescription }
+                                Task {
+                                    do {
+                                        try await controller.modelSettings.saveAPIKey()
+                                        keyStatus = "Saved"
+                                    } catch { keyStatus = error.localizedDescription }
+                                }
                             }
-                            .disabled(apiKeyDraftIsEmpty)
+                            .disabled(apiKeyDraftIsEmpty || controller.modelSettings.isLoadingAPIKey)
                             Button(role: .destructive) {
                                 isConfirmingAPIKeyRemoval = true
                             } label: {
@@ -60,7 +62,7 @@ struct ModelSettingsView: View {
                             }
                             .buttonStyle(.bordered)
                             .tint(.red)
-                            .disabled(!controller.modelSettings.hasStoredAPIKey)
+                            .disabled(!controller.modelSettings.hasStoredAPIKey || controller.modelSettings.isLoadingAPIKey)
                             .help("Remove API key from Keychain")
                             .accessibilityLabel("Remove API key from Keychain")
                             Text(apiKeyStatus)
@@ -91,20 +93,24 @@ struct ModelSettingsView: View {
             titleVisibility: .visible
         ) {
             Button("Delete from Keychain", role: .destructive) {
-                do {
-                    try controller.modelSettings.removeAPIKey()
-                    keyStatus = "Removed from Keychain"
-                } catch {
-                    keyStatus = error.localizedDescription
+                Task {
+                    do {
+                        try await controller.modelSettings.removeAPIKey()
+                        keyStatus = "Removed from Keychain"
+                    } catch {
+                        keyStatus = error.localizedDescription
+                    }
                 }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Beacon will delete the stored key from macOS Keychain. You can add another key later.")
         }
+        .task { await controller.modelSettings.loadAPIKeyIfNeeded() }
     }
 
     private var apiKeyStatus: String {
+        if controller.modelSettings.isLoadingAPIKey { return "Loading from Keychain…" }
         if !keyStatus.isEmpty { return keyStatus }
         return controller.modelSettings.hasStoredAPIKey ? "Stored in Keychain" : "Not saved"
     }

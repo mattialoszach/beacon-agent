@@ -38,22 +38,18 @@ final class BeaconController: ObservableObject {
 
     private let accessibility = AccessibilityService()
     private let screenCapture = ScreenCaptureService()
-    private let redactor = RedactionService()
     private let visionAnalyzer = VisionSceneAnalyzer()
-    private let sensitiveTextDetector = SensitiveTextDetector()
     private let setOfMarksBuilder = SetOfMarksBuilder()
-    private let setOfMarksRenderer = SetOfMarksRenderer()
     private let accessibilityChangeObserver = AccessibilityChangeObserver()
     private let guidePolicyRegistry = ApplicationGuidePolicyRegistry()
     private let sceneFreshnessValidator = SceneFreshnessValidator()
     private let grounder: any GroundingStrategy = HybridGrounder()
     private let shortcut = GlobalShortcutMonitor()
-    private let requestModeClassifier = RequestModeClassifier()
     private let cursorPositionMonitor: CursorPositionMonitor
     private let prompt: FloatingPromptController
     private let overlay: OverlayController
     private var machine = InstructorStateMachine()
-    private var preparedScene: ScreenScene?
+    private var preparedSceneTask: Task<ScreenScene, Error>?
     private var currentSetOfMarks: [SetOfMark] = []
     private var requestTask: Task<Void, Never>?
     private var requestID: UUID?
@@ -64,6 +60,7 @@ final class BeaconController: ObservableObject {
     private var currentMode: InteractionMode = .ask
     private var settingsCancellables = Set<AnyCancellable>()
     private var lastExternalApplication: NSRunningApplication?
+    private var processingActivity: NSObjectProtocol?
     private var started = false
 
     var isObserving: Bool {
@@ -106,6 +103,7 @@ final class BeaconController: ObservableObject {
         let registered = shortcut.registerOptionSpace { [weak self] in self?.showPrompt() }
         if !registered { statusMessage = "Option + Space is already used by another app" }
         overlay.onDismiss = { [weak self] in self?.cancel() }
+        Task { await modelSettings.loadAPIKeyIfNeeded() }
     }
 
     func showPrompt() {
@@ -114,26 +112,50 @@ final class BeaconController: ObservableObject {
             return
         }
         errorMessage = nil
+        preparedSceneTask?.cancel()
         do {
-            preparedScene = try captureTargetScene()
+            let target = try captureTargetApplication()
+            preparedSceneTask = Task { [accessibility] in
+                try await accessibility.captureScene(for: target)
+            }
         } catch {
-            preparedScene = nil
+            preparedSceneTask = nil
             errorMessage = error.localizedDescription
         }
         prompt.show(
             onSubmit: { [weak self] question in
                 guard let self else { return }
-                let classification = self.requestModeClassifier.classification(
-                    for: question,
-                    scene: self.preparedScene
-                )
-                self.requestModeClassification = classification
+                let preparedSceneTask = self.preparedSceneTask
+                self.preparedSceneTask = nil
                 let identifier = UUID()
                 self.requestTask?.cancel()
                 self.requestID = identifier
+                self.beginProcessingActivity()
                 self.requestTask = Task { [weak self] in
                     guard let self else { return }
-                    await self.run(question: question, mode: classification.mode)
+                    do {
+                        let scene: ScreenScene
+                        if let preparedSceneTask {
+                            scene = try await preparedSceneTask.value
+                        } else {
+                            scene = try await self.captureTargetScene()
+                        }
+                        let classification = await Task.detached(priority: .userInitiated) {
+                            RequestModeClassifier().classification(for: question, scene: scene)
+                        }.value
+                        guard !Task.isCancelled else { return }
+                        self.requestModeClassification = classification
+                        await self.run(
+                            question: question,
+                            mode: classification.mode,
+                            initialScene: scene
+                        )
+                    } catch is CancellationError {
+                        return
+                    } catch {
+                        guard !Task.isCancelled else { return }
+                        self.fail(with: error)
+                    }
                     if self.requestID == identifier {
                         self.requestTask = nil
                         self.requestID = nil
@@ -144,8 +166,13 @@ final class BeaconController: ObservableObject {
         )
     }
 
-    func run(question: String, mode: InteractionMode) async {
-        cancel(resetMessage: false, dismissesPrompt: false, cancelsRequest: false)
+    func run(question: String, mode: InteractionMode, initialScene: ScreenScene? = nil) async {
+        cancel(
+            resetMessage: false,
+            dismissesPrompt: false,
+            cancelsRequest: false,
+            endsProcessingActivity: false
+        )
         currentQuestion = question
         currentMode = mode
         errorMessage = nil
@@ -155,8 +182,12 @@ final class BeaconController: ObservableObject {
             try transition(.questionReceived)
             statusMessage = "Reading the current interface…"
             prompt.updateThinking(message: statusMessage)
-            var scene = try preparedScene ?? captureTargetScene()
-            preparedScene = nil
+            var scene: ScreenScene
+            if let initialScene {
+                scene = initialScene
+            } else {
+                scene = try await captureTargetScene()
+            }
 
             if privacySettings.isExcluded(bundleIdentifier: scene.activeApplication.bundleIdentifier) {
                 statusMessage = "\(scene.activeApplication.name) is excluded; no screenshot was captured"
@@ -180,23 +211,23 @@ final class BeaconController: ObservableObject {
 
     func refreshInspector() async {
         do {
-            var scene = try captureTargetScene()
+            var scene = try await captureTargetScene()
             if !privacySettings.isExcluded(bundleIdentifier: scene.activeApplication.bundleIdentifier),
                CGPreflightScreenCaptureAccess() {
                 scene = try await addingVisualContext(to: scene, point: nil)
             }
             currentScene = scene
             currentSetOfMarks = setOfMarksBuilder.build(scene: scene, query: currentQuestion)
-            setOfMarksPreview = try? setOfMarksRenderer.render(scene: scene, marks: currentSetOfMarks)
+            setOfMarksPreview = try? await renderSetOfMarks(scene: scene, marks: currentSetOfMarks)
             statusMessage = "Inspector refreshed: \(scene.elements.count) AX + \(scene.visualElements.count) visual elements"
         } catch { errorMessage = error.localizedDescription }
     }
 
-    func rebuildSetOfMarksPreview() {
+    func rebuildSetOfMarksPreview() async {
         guard let scene = currentScene else { return }
         do {
             currentSetOfMarks = setOfMarksBuilder.build(scene: scene, query: currentQuestion)
-            setOfMarksPreview = try setOfMarksRenderer.render(scene: scene, marks: currentSetOfMarks)
+            setOfMarksPreview = try await renderSetOfMarks(scene: scene, marks: currentSetOfMarks)
             statusMessage = "Set of Marks ready: \(setOfMarksPreview?.marks.count ?? 0) candidates"
         } catch { errorMessage = error.localizedDescription }
     }
@@ -209,7 +240,7 @@ final class BeaconController: ObservableObject {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(500))
                 guard let self, !Task.isCancelled else { return }
-                guard let scene = try? self.captureTargetScene() else { continue }
+                guard let scene = try? await self.captureTargetScene() else { continue }
                 self.currentScene = scene
                 self.overlay.updateDebugElements(scene.elements)
             }
@@ -225,13 +256,16 @@ final class BeaconController: ObservableObject {
     func cancel(
         resetMessage: Bool = true,
         dismissesPrompt: Bool = true,
-        cancelsRequest: Bool = true
+        cancelsRequest: Bool = true,
+        endsProcessingActivity: Bool = true
     ) {
         if cancelsRequest {
             requestID = nil
             requestTask?.cancel()
             requestTask = nil
         }
+        preparedSceneTask?.cancel()
+        preparedSceneTask = nil
         observationTask?.cancel()
         observationTask = nil
         observationID = nil
@@ -243,6 +277,7 @@ final class BeaconController: ObservableObject {
         try? transition(.cancel)
         selectedTarget = nil
         activeGuide = nil
+        if endsProcessingActivity { endProcessingActivity() }
         if resetMessage { statusMessage = "Ready — press Option + Space" }
     }
 
@@ -254,7 +289,7 @@ final class BeaconController: ObservableObject {
         errorMessage = nil
     }
 
-    private func selectedModel(for request: InstructorRequest) throws -> any InstructorModel {
+    private func selectedModel(for request: InstructorRequest) async throws -> any InstructorModel {
         if privacySettings.isExcluded(bundleIdentifier: request.scene.activeApplication.bundleIdentifier) {
             return AccessibilityHeuristicProvider()
         }
@@ -265,6 +300,7 @@ final class BeaconController: ObservableObject {
             guard privacySettings.cloudProcessingEnabled else {
                 return AccessibilityHeuristicProvider()
             }
+            await modelSettings.loadAPIKeyIfNeeded()
             return OpenAIProvider(
                 model: modelSettings.openAIModel.rawValue,
                 apiKey: modelSettings.apiKey,
@@ -280,13 +316,20 @@ final class BeaconController: ObservableObject {
         }
     }
 
-    private func captureTargetScene() throws -> ScreenScene {
+    private func captureTargetApplication() throws -> AccessibilityApplicationTarget {
         let frontmost = NSWorkspace.shared.frontmostApplication
         if let frontmost, frontmost.bundleIdentifier != Bundle.main.bundleIdentifier {
             lastExternalApplication = frontmost
-            return try accessibility.captureScene(for: frontmost)
+            return AccessibilityApplicationTarget(application: frontmost)
         }
-        return try accessibility.captureScene(for: lastExternalApplication)
+        guard let lastExternalApplication, !lastExternalApplication.isTerminated else {
+            throw AccessibilityCaptureError.noFrontmostApplication
+        }
+        return AccessibilityApplicationTarget(application: lastExternalApplication)
+    }
+
+    private func captureTargetScene() async throws -> ScreenScene {
+        try await accessibility.captureScene(for: captureTargetApplication())
     }
 
     private func generateAndPresent(
@@ -309,11 +352,11 @@ final class BeaconController: ObservableObject {
             prompt.updateThinking(message: statusMessage)
             modelResponse = planned
         } else {
-            let model = try selectedModel(for: request)
+            let model = try await selectedModel(for: request)
             if model.capabilities.contains(.vision),
                privacySettings.cloudVisionEnabled,
                scene.screenshot != nil {
-                let markedScene = try setOfMarksRenderer.render(scene: scene, marks: request.setOfMarks)
+                let markedScene = try await renderSetOfMarks(scene: scene, marks: request.setOfMarks)
                 request.visualContextImage = markedScene.snapshot
                 setOfMarksPreview = markedScene
                 outboundImagePreview = markedScene.snapshot
@@ -371,7 +414,7 @@ final class BeaconController: ObservableObject {
 
             statusMessage = "Checking that the interface is still ready…"
             prompt.updateThinking(message: statusMessage)
-            let latestScene = try captureTargetScene()
+            let latestScene = try await captureTargetScene()
             switch await validatePresentation(
                 source: scene,
                 latest: latestScene,
@@ -424,6 +467,7 @@ final class BeaconController: ObservableObject {
         } else {
             statusMessage = response.taskComplete == true ? "Task completed" : "Answered"
             activeGuide = nil
+            endProcessingActivity()
         }
     }
 
@@ -433,12 +477,19 @@ final class BeaconController: ObservableObject {
             excludingBundleIdentifiers: privacySettings.excludedBundleIdentifiers
         )
         let visualElements = try await visionAnalyzer.analyze(snapshot: snapshot)
-        let sensitiveRegions = sensitiveTextDetector.redactionRegions(in: visualElements)
-        let regions = redactor.automaticRegions(in: scene) + sensitiveRegions
-        let safeSnapshot = try redactor.redact(snapshot: snapshot, regions: regions)
+        let safeContent = try await Task.detached(priority: .userInitiated) {
+            let detector = SensitiveTextDetector()
+            let redactor = RedactionService()
+            let sensitiveRegions = detector.redactionRegions(in: visualElements)
+            let regions = redactor.automaticRegions(in: scene) + sensitiveRegions
+            return (
+                try redactor.redact(snapshot: snapshot, regions: regions),
+                detector.removingSensitiveElements(from: visualElements)
+            )
+        }.value
         return scene
-            .replacingScreenshot(with: safeSnapshot)
-            .replacingVisualElements(with: sensitiveTextDetector.removingSensitiveElements(from: visualElements))
+            .replacingScreenshot(with: safeContent.0)
+            .replacingVisualElements(with: safeContent.1)
     }
 
     private func scenePreparedForReasoning(
@@ -451,7 +502,7 @@ final class BeaconController: ObservableObject {
             let point = scene.activeWindow?.bounds
                 .flatMap(DisplayGeometryProvider().currentMapper().axRect(from:))?.center
             let visualScene = try await addingVisualContext(to: scene, point: point)
-            let latest = try captureTargetScene()
+            let latest = try await captureTargetScene()
             guard sceneFreshnessValidator.contextIssue(source: scene, latest: latest) == nil else {
                 statusMessage = "The interface changed while I was reading it. Using the latest view…"
                 prompt.updateThinking(message: statusMessage)
@@ -483,9 +534,12 @@ final class BeaconController: ObservableObject {
            ApplicationGuidePlanner(registry: guidePolicyRegistry).response(for: request) != nil {
             return false
         }
-        guard let model = try? selectedModel(for: request) else { return false }
-        return model.capabilities.contains(.local)
-            || (model.capabilities.contains(.vision) && privacySettings.cloudVisionEnabled)
+        if modelSettings.provider == .openAI,
+           privacySettings.cloudProcessingEnabled,
+           privacySettings.cloudVisionEnabled {
+            return true
+        }
+        return LocalVisualContextPolicy.requiresVisualFallback(scene: scene, question: question)
     }
 
     private func validatePresentation(
@@ -522,7 +576,7 @@ final class BeaconController: ObservableObject {
                 let point = latest.activeWindow?.bounds
                     .flatMap(DisplayGeometryProvider().currentMapper().axRect(from:))?.center
                 let visualScene = try await addingVisualContext(to: latest, point: point)
-                let finalScene = try captureTargetScene()
+                let finalScene = try await captureTargetScene()
                 if case let .stale(issue) = sceneFreshnessValidator.validate(
                     source: source,
                     latest: finalScene,
@@ -530,11 +584,19 @@ final class BeaconController: ObservableObject {
                 ) {
                     return .stale(issue: issue, latest: finalScene)
                 }
-                guard let currentSnapshot = visualScene.screenshot,
-                      !FrameDifferenceDetector().isMeaningfulChange(
+                guard let currentSnapshot = visualScene.screenshot else {
+                    return .stale(
+                        issue: .visualContextUnavailable(application: source.activeApplication.name),
+                        latest: finalScene
+                    )
+                }
+                let changed = await Task.detached(priority: .userInitiated) {
+                    FrameDifferenceDetector().isMeaningfulChange(
                         between: sourceSnapshot,
                         and: currentSnapshot
-                      ) else {
+                    )
+                }.value
+                guard !changed else {
                     return .stale(
                         issue: .visualContextUnavailable(application: source.activeApplication.name),
                         latest: finalScene
@@ -592,6 +654,7 @@ final class BeaconController: ObservableObject {
             prompt.close()
             activeGuide = nil
             statusMessage = "Task completed"
+            endProcessingActivity()
         }
         return true
     }
@@ -628,7 +691,7 @@ final class BeaconController: ObservableObject {
                     try? await Task.sleep(for: .milliseconds(120))
                     guard !Task.isCancelled else { return }
                 }
-                guard let restoredScene = try? self.captureTargetScene() else { continue }
+                guard let restoredScene = try? await self.captureTargetScene() else { continue }
                 switch self.sceneFreshnessValidator.validate(
                     source: source,
                     latest: restoredScene,
@@ -672,6 +735,7 @@ final class BeaconController: ObservableObject {
             self.activeGuide = nil
             self.statusMessage = "I stopped the guide because the previous view was not restored. Start again when it is ready."
             self.prompt.showWaiting(message: self.statusMessage) { [weak self] in self?.cancel() }
+            self.endProcessingActivity()
         }
     }
 
@@ -698,7 +762,7 @@ final class BeaconController: ObservableObject {
                     guard !Task.isCancelled else { return }
                 }
                 do {
-                    var newScene = try self.captureTargetScene()
+                    var newScene = try await self.captureTargetScene()
                     if let targetID,
                        let element = newScene.elements.first(where: { $0.id == targetID }),
                        let bounds = element.bounds {
@@ -717,7 +781,7 @@ final class BeaconController: ObservableObject {
                             .flatMap(DisplayGeometryProvider().currentMapper().axRect(from:))?.center
                         let accessibilityScene = newScene
                         let visualScene = try await self.addingVisualContext(to: accessibilityScene, point: point)
-                        let stableScene = try self.captureTargetScene()
+                        let stableScene = try await self.captureTargetScene()
                         guard self.sceneFreshnessValidator.contextIssue(
                             source: accessibilityScene,
                             latest: stableScene
@@ -726,10 +790,12 @@ final class BeaconController: ObservableObject {
                         newScene = stableScene
                             .replacingScreenshot(with: visualScene.screenshot)
                             .replacingVisualElements(with: visualScene.visualElements)
-                        let difference = FrameDifferenceDetector().difference(
-                            between: baselineSnapshot,
-                            and: currentSnapshot
-                        )
+                        let difference = await Task.detached(priority: .userInitiated) {
+                            FrameDifferenceDetector().difference(
+                                between: baselineSnapshot,
+                                and: currentSnapshot
+                            )
+                        }.value
                         guard difference >= FrameDifferenceDetector().meaningfulThreshold else { continue }
                         visualDifference = difference
                     }
@@ -811,6 +877,7 @@ final class BeaconController: ObservableObject {
                             ? "Task paused at the 8-step safety limit"
                             : "Task completed"
                         self.activeGuide = nil
+                        self.endProcessingActivity()
                     }
                     return
                 } catch {
@@ -880,6 +947,7 @@ final class BeaconController: ObservableObject {
         try? transition(.fail)
         statusMessage = message
         activeGuide = nil
+        endProcessingActivity()
         if let index = history.firstIndex(where: { $0.succeeded == nil }) {
             history[index] = history[index].withSucceeded(false)
         }
@@ -937,6 +1005,7 @@ final class BeaconController: ObservableObject {
         statusMessage = "Beacon couldn't complete that request"
         overlay.dismiss()
         prompt.close()
+        endProcessingActivity()
     }
 
     private func appendHistory(
@@ -958,6 +1027,40 @@ final class BeaconController: ObservableObject {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         return (try? encoder.encode(response)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+    }
+
+    private func renderSetOfMarks(
+        scene: ScreenScene,
+        marks: [SetOfMark]
+    ) async throws -> MarkedScreenScene {
+        try await Task.detached(priority: .userInitiated) {
+            try SetOfMarksRenderer().render(scene: scene, marks: marks)
+        }.value
+    }
+
+    private func beginProcessingActivity() {
+        endProcessingActivity()
+        processingActivity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiated],
+            reason: "Processing an explicit Beacon guidance request"
+        )
+    }
+
+    private func endProcessingActivity() {
+        guard let processingActivity else { return }
+        ProcessInfo.processInfo.endActivity(processingActivity)
+        self.processingActivity = nil
+    }
+}
+
+enum LocalVisualContextPolicy {
+    static func requiresVisualFallback(scene: ScreenScene, question: String) -> Bool {
+        let normalized = question.lowercased()
+        let explicitlyVisual = [
+            "circle", "rectangle", "shape", "drawing", "canvas", "icon", "symbol",
+            "image", "screenshot", "visible", "on screen"
+        ].contains(where: normalized.contains)
+        return explicitlyVisual || SemanticElementMatcher.bestMatch(for: question, in: scene.elements) == nil
     }
 }
 

@@ -30,9 +30,9 @@ Overlay windows are one transparent, click-through `NSPanel` per `NSScreen`. Eac
 
 ## Scene capture
 
-`AccessibilityService` visits the focused application's hierarchy with depth and element-count limits, loop detection, bounds validation, and secure-field value suppression. It emits `UIElementDescriptor` values; platform objects never cross into the reasoning layer.
+`AccessibilityService` visits the focused application's hierarchy on a background executor with depth, elapsed-time, visited-node, and output limits. Attribute reads are batched to reduce cross-process calls, while loop detection, bounds validation, and secure-field value suppression remain enforced. It emits `UIElementDescriptor` values; platform objects never cross into the reasoning layer.
 
-`ScreenCaptureService` uses ScreenCaptureKit and captures a single relevant display only after explicit interaction. Screenshots are optional. Accessibility-only guidance remains available when Screen Recording is denied.
+`ScreenCaptureService` uses ScreenCaptureKit and captures a single relevant display only after explicit interaction. Captures used for local analysis are aspect-fit to a 1920-pixel longest edge to bound memory and Vision latency. Screenshots are optional, and Beacon skips visual analysis when Accessibility already provides a matching target. Accessibility-only guidance remains available when Screen Recording is denied.
 
 `VisionSceneAnalyzer` runs Apple's Vision framework locally. It combines OCR with rectangle detection and light/dark contour analysis, classifying normalized candidates as text, rectangle, circle, icon, or freeform canvas shape. Nearby OCR labels are associated with detected shapes when possible. Sensitive candidates are removed before model context is created, and the image is redacted before it becomes eligible for a privacy preview or provider request.
 
@@ -59,6 +59,8 @@ idle → capturingScene → understanding → grounding → presenting
 Before an instruction reaches the overlay, `SceneFreshnessValidator` recaptures the Accessibility scene and confirms that the application, window, semantic interface, and target still match the scene used for reasoning. It refreshes valid Accessibility bounds and requires a new matching frame for visual targets. A stale result is never rendered. If the user already completed the expected step, Beacon verifies it and replans from the new scene. Otherwise it enters `awaitingContextRestore`, explains what needs to be reopened, and resumes from a fresh capture when that context returns.
 
 Cancellation returns any state to idle. Invalid transitions throw. The visible processing and recovery HUD is a click-through, non-key panel, so it does not dismiss menus or popovers. While a visible guide step or context-recovery request is active, `AccessibilityChangeObserver` listens for focus, value, menu, window, layout, move, and resize notifications. Low-rate fallback timers cover applications that do not publish useful events. Visual verification samples remain local and in memory. Successful verification advances the same guide with completed-step context, up to an eight-step safety limit.
+
+An explicit request holds a user-initiated process activity until its answer or visible guide completes. This prevents App Nap from stretching capture and verification latency when Beacon's main window is behind another app or closed; cancellation and every terminal path release the activity.
 
 `ApplicationGuidePolicyRegistry` contains guidance-only fixtures for common TextEdit, Preview, Finder, Safari, and System Settings tasks. It can recover from layout differences, retries unexpected or missing changes within application-specific limits, and stops with an actionable message when an outcome cannot be confirmed. It never performs the action for the user.
 

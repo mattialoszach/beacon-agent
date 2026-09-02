@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-private enum AppSection: String, CaseIterable, Identifiable {
+private enum AppSection: String, CaseIterable, Identifiable, Hashable {
     case home = "Home"
     case history = "History"
     case privacy = "Privacy"
@@ -49,7 +49,9 @@ struct MainWindowView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(selection == section ? .white : .primary)
+                .listRowBackground(Color.clear)
             }
+            .listStyle(.sidebar)
             .navigationTitle("Beacon")
             .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 280)
             .safeAreaInset(edge: .bottom) {
