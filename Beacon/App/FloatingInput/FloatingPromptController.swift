@@ -213,20 +213,18 @@ private struct FloatingPromptView: View {
                 .animation(
                     reduceMotion
                         ? nil
-                        : .easeInOut(duration: 0.34).delay(isThinking ? 0.06 : 0),
+                        : .easeInOut(duration: 0.2).delay(isThinking ? 0.26 : 0),
                     value: isThinking
                 )
             promptContents
             DreamyThinkingOrb(message: presentation.message)
                 .opacity(isThinking ? 1 : 0)
-                .scaleEffect(isThinking ? 1 : 0.72)
-                .blur(radius: isThinking ? 0 : 8)
+                .blur(radius: isThinking ? 0 : 2.5)
                 .accessibilityHidden(!isThinking)
                 .animation(
                     reduceMotion
                         ? nil
-                        : .spring(response: 0.6, dampingFraction: 0.86, blendDuration: 0.1)
-                            .delay(isThinking ? 0.08 : 0),
+                        : .easeInOut(duration: 0.28).delay(isThinking ? 0.2 : 0),
                     value: isThinking
                 )
         }
@@ -234,19 +232,7 @@ private struct FloatingPromptView: View {
             width: isThinking ? FloatingPromptLayout.thinkingSize.width : FloatingPromptLayout.promptSize.width,
             height: isThinking ? FloatingPromptLayout.thinkingSize.height : FloatingPromptLayout.promptSize.height
         )
-        .clipShape(RoundedRectangle(cornerRadius: isThinking ? 0 : 18, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: isThinking ? 32 : 18, style: .continuous)
-                .stroke(
-                    LinearGradient(
-                        colors: [.white.opacity(0.46), .white.opacity(0.1)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 1
-                )
-                .opacity(isThinking ? 0 : 1)
-        }
+        .clipShape(RoundedRectangle(cornerRadius: isThinking ? 28 : 18, style: .continuous))
         .shadow(
             color: .black.opacity(isThinking ? 0.2 : 0.24),
             radius: isThinking ? 18 : 28,
@@ -257,7 +243,7 @@ private struct FloatingPromptView: View {
         .animation(
             reduceMotion
                 ? nil
-                : .spring(response: 0.74, dampingFraction: 0.9, blendDuration: 0.12),
+                : .spring(response: 0.56, dampingFraction: 0.86, blendDuration: 0.2),
             value: isThinking
         )
         .onAppear { focused = !isThinking }
@@ -269,21 +255,45 @@ private struct FloatingPromptView: View {
     }
 
     private var surface: some View {
-        RoundedRectangle(cornerRadius: isThinking ? 32 : 18, style: .continuous)
+        let shape = RoundedRectangle(
+            cornerRadius: isThinking ? FloatingPromptLayout.thinkingSize.width / 2 : 18,
+            style: .continuous
+        )
+
+        return shape
             .fill(.ultraThickMaterial)
             .overlay {
-                RoundedRectangle(cornerRadius: isThinking ? 32 : 18, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                BeaconPalette.lavender.opacity(isThinking ? 0.22 : 0.12),
-                                BeaconPalette.thistle.opacity(0.04)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
+                shape.fill(
+                    LinearGradient(
+                        colors: [
+                            BeaconPalette.lavender.opacity(isThinking ? 0.22 : 0.12),
+                            BeaconPalette.thistle.opacity(0.04)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
                     )
+                )
             }
+            .overlay {
+                shape.stroke(
+                    LinearGradient(
+                        colors: [
+                            .white.opacity(0.5),
+                            BeaconPalette.plum.opacity(0.2),
+                            .white.opacity(0.08)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1
+                )
+            }
+            .animation(
+                reduceMotion
+                    ? nil
+                    : .spring(response: 0.56, dampingFraction: 0.86, blendDuration: 0.2),
+                value: isThinking
+            )
     }
 
     private var promptContents: some View {
@@ -694,7 +704,25 @@ private enum ThinkingFormPath {
         deformation: Double,
         pointCount: Int
     ) -> Path {
-        let points = (0..<pointCount).map { index in
+        make(points: points(
+            center: center,
+            radius: radius,
+            time: time,
+            phase: phase,
+            deformation: deformation,
+            pointCount: pointCount
+        ))
+    }
+
+    static func points(
+        center: CGPoint,
+        radius: CGFloat,
+        time: TimeInterval,
+        phase: Double,
+        deformation: Double,
+        pointCount: Int
+    ) -> [CGPoint] {
+        (0..<pointCount).map { index in
             let angle = Double(index) / Double(pointCount) * .pi * 2
             let offset = sin(angle * 3 + time * 1.18 + phase) * deformation
                 + cos(angle * 5 - time * 0.94 - phase * 0.7) * deformation * 0.48
@@ -705,7 +733,11 @@ private enum ThinkingFormPath {
                 y: center.y + sin(angle) * pointRadius
             )
         }
+    }
 
+    static func make(points: [CGPoint]) -> Path {
+        guard !points.isEmpty else { return Path() }
+        let pointCount = points.count
         var path = Path()
         path.move(to: points[0])
         for index in 0..<pointCount {
