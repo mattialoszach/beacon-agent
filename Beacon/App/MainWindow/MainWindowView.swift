@@ -33,8 +33,22 @@ struct MainWindowView: View {
 
     var body: some View {
         NavigationSplitView {
-            List(visibleSections, selection: $selection) { section in
-                Label(section.rawValue, systemImage: section.icon).tag(section)
+            List(visibleSections) { section in
+                Button {
+                    selection = section
+                } label: {
+                    Label(section.rawValue, systemImage: section.icon)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .contentShape(Rectangle())
+                        .background(
+                            selection == section ? BeaconPalette.blueViolet : .clear,
+                            in: RoundedRectangle(cornerRadius: 6)
+                        )
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(selection == section ? .white : .primary)
             }
             .navigationTitle("Beacon")
             .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 280)
