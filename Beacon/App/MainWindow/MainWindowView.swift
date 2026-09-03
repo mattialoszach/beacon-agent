@@ -96,7 +96,10 @@ private struct StatusPill: View {
             Text(controller.statusMessage)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .allowsTightening(true)
+                .help(controller.statusMessage)
             Spacer(minLength: 0)
         }
         .padding(9)
