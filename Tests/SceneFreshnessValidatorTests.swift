@@ -59,6 +59,50 @@ final class SceneFreshnessValidatorTests: XCTestCase {
         XCTAssertEqual(result, .stale(.interfaceChanged(application: "Fixture")))
     }
 
+    func testAcceptsVolatileStateAndSmallAccessibilityTreeDifferences() {
+        let stableElements = (0..<7).map { index in
+            element(id: "stable_\(index)", label: "Control \(index)")
+        }
+        let source = scene(elements: [
+            element(id: "target", label: "Save", value: "Idle")
+        ] + stableElements)
+        let latest = scene(elements: [
+            element(id: "target", label: "Save", x: 0.4, value: "Active", focused: true)
+        ] + stableElements + [element(id: "transient", label: "Status")])
+
+        XCTAssertNil(validator.contextIssue(source: source, latest: latest))
+        XCTAssertEqual(
+            validator.validate(
+                source: source,
+                latest: latest,
+                target: .accessibilityElement(
+                    elementId: "target",
+                    bounds: NormalizedRect(x: 0.1, y: 0.1, width: 0.1, height: 0.1)
+                )
+            ),
+            .valid(target: .accessibilityElement(
+                elementId: "target",
+                bounds: NormalizedRect(x: 0.4, y: 0.1, width: 0.1, height: 0.1)
+            ))
+        )
+    }
+
+    func testRejectsATargetThatBecameDisabled() {
+        let source = scene(elements: [element(id: "target", label: "Save")])
+        let latest = scene(elements: [element(id: "target", label: "Save", enabled: false)])
+
+        let result = validator.validate(
+            source: source,
+            latest: latest,
+            target: .accessibilityElement(
+                elementId: "target",
+                bounds: NormalizedRect(x: 0.1, y: 0.1, width: 0.1, height: 0.1)
+            )
+        )
+
+        XCTAssertEqual(result, .stale(.targetUnavailable(label: "Save", application: "Fixture")))
+    }
+
     func testRejectsAnApplicationChange() {
         let source = scene(elements: [element(id: "target", label: "Save")])
         let latest = scene(
@@ -100,7 +144,10 @@ final class SceneFreshnessValidatorTests: XCTestCase {
         id: String,
         role: String = "AXButton",
         label: String,
-        x: Double = 0.1
+        x: Double = 0.1,
+        value: String? = nil,
+        enabled: Bool = true,
+        focused: Bool = false
     ) -> UIElementDescriptor {
         UIElementDescriptor(
             id: id,
@@ -108,9 +155,9 @@ final class SceneFreshnessValidatorTests: XCTestCase {
             subrole: nil,
             label: label,
             title: nil,
-            value: nil,
-            enabled: true,
-            focused: false,
+            value: value,
+            enabled: enabled,
+            focused: focused,
             bounds: NormalizedRect(x: x, y: 0.1, width: 0.1, height: 0.1)
         )
     }

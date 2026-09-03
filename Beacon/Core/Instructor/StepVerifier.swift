@@ -27,6 +27,7 @@ struct StepVerifier: Sendable {
         let afterFocused = after.elements.first(where: \.focused)?.bestLabel
         let windowChanged = before.activeWindow?.title != after.activeWindow?.title
         let hierarchyChanged = beforeLabels != afterLabels
+        let controlStateChanged = hasControlStateChange(from: before, to: after)
 
         let success: Bool
         switch expected.type {
@@ -39,7 +40,7 @@ struct StepVerifier: Sendable {
         case .elementAppears:
             success = !afterLabels.subtracting(beforeLabels).isEmpty
         case .visualChange:
-            success = windowChanged || hierarchyChanged || beforeFocused != afterFocused
+            success = windowChanged || hierarchyChanged || controlStateChanged
                 || (visualDifference ?? 0) >= FrameDifferenceDetector().meaningfulThreshold
         }
         return StepVerification(
@@ -49,4 +50,19 @@ struct StepVerifier: Sendable {
                 : "The interface changed, but not in the expected way: \(expected.description)"
         )
     }
+
+    private func hasControlStateChange(from before: ScreenScene, to after: ScreenScene) -> Bool {
+        let beforeStates = Dictionary(uniqueKeysWithValues: before.elements.map { element in
+            (element.id, ControlState(value: element.value, enabled: element.enabled))
+        })
+        return after.elements.contains { element in
+            guard let previous = beforeStates[element.id] else { return false }
+            return previous != ControlState(value: element.value, enabled: element.enabled)
+        }
+    }
+}
+
+private struct ControlState: Equatable {
+    let value: String?
+    let enabled: Bool
 }

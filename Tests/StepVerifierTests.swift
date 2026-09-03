@@ -34,10 +34,36 @@ final class StepVerifierTests: XCTestCase {
         XCTAssertFalse(StepVerifier().verify(expected: expected, before: before, after: after).succeeded)
     }
 
+    func testFocusOnlyChangeDoesNotSatisfyVisualChange() {
+        let before = scene(title: "Document", labels: ["Field", "Save"], focusedLabel: "Field")
+        let after = scene(title: "Document", labels: ["Field", "Save"], focusedLabel: "Save")
+        let expected = ExpectedOutcome(type: .visualChange, description: "The content changes")
+
+        XCTAssertFalse(StepVerifier().verify(expected: expected, before: before, after: after).succeeded)
+    }
+
+    func testControlValueChangeSatisfiesVisualChange() {
+        let before = scene(
+            title: "Document",
+            labels: ["Permission"],
+            values: ["Permission": "0"]
+        )
+        let after = scene(
+            title: "Document",
+            labels: ["Permission"],
+            values: ["Permission": "1"]
+        )
+        let expected = ExpectedOutcome(type: .visualChange, description: "Permission is enabled")
+
+        XCTAssertTrue(StepVerifier().verify(expected: expected, before: before, after: after).succeeded)
+    }
+
     private func scene(
         title: String,
         labels: [String],
-        bundleIdentifier: String = "fixture"
+        bundleIdentifier: String = "fixture",
+        focusedLabel: String? = nil,
+        values: [String: String] = [:]
     ) -> ScreenScene {
         ScreenScene(
             timestamp: Date(),
@@ -47,7 +73,7 @@ final class StepVerifierTests: XCTestCase {
             elements: labels.enumerated().map { index, label in
                 UIElementDescriptor(
                     id: "e_\(index)", role: "AXButton", subrole: nil, label: label,
-                    title: nil, value: nil, enabled: true, focused: false,
+                    title: nil, value: values[label], enabled: true, focused: label == focusedLabel,
                     bounds: .init(x: 0.1, y: 0.1 + Double(index) * 0.1, width: 0.1, height: 0.05)
                 )
             },

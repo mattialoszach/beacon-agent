@@ -752,6 +752,7 @@ final class BeaconController: ObservableObject {
         )
         observationTask = Task { [weak self] in
             let deadline = Date().addingTimeInterval(30)
+            var latestUnconfirmedScene: ScreenScene?
             for await event in events {
                 guard !Task.isCancelled else { return }
                 guard let self, self.observationID == identifier else { return }
@@ -799,14 +800,6 @@ final class BeaconController: ObservableObject {
                         guard difference >= FrameDifferenceDetector().meaningfulThreshold else { continue }
                         visualDifference = difference
                     }
-                    self.accessibilityChangeObserver.stop()
-                    try self.transition(.meaningfulChangeDetected)
-                    self.currentScene = newScene
-                    self.statusMessage = "Verifying the result…"
-                    self.overlay.dismiss()
-                    self.prompt.showThinking(message: self.statusMessage) { [weak self] in
-                        self?.cancel()
-                    }
                     let verification = StepVerifier().verify(
                         expected: self.currentResponse?.expectedOutcome,
                         before: baseline,
@@ -820,6 +813,8 @@ final class BeaconController: ObservableObject {
                             latest: newScene,
                             target: target
                         ) {
+                            self.accessibilityChangeObserver.stop()
+                            try self.transition(.meaningfulChangeDetected)
                             try self.transition(.verificationFinished(success: false, hasNextStep: false))
                             try self.beginContextRecovery(
                                 issue: issue,
@@ -831,34 +826,18 @@ final class BeaconController: ObservableObject {
                             )
                             return
                         }
-                        let attempt = self.incrementRecoveryAttempt(noChange: false)
-                        let decision = self.guidePolicyRegistry.recoveryDecision(
-                            for: newScene.activeApplication.bundleIdentifier,
-                            attempt: attempt,
-                            noChange: false,
-                            expectedDescription: self.currentResponse?.expectedOutcome?.description
-                        )
-                        try self.transition(.verificationFinished(success: false, hasNextStep: false))
-                        if decision.action == .stop {
-                            self.stopGuideAfterRecovery(message: decision.message)
-                            return
-                        }
-                        self.statusMessage = decision.message
-                        self.prompt.close()
-                        if let response = self.currentResponse, let target = self.selectedTarget {
-                            self.overlay.showInstruction(VisualInstruction(
-                                text: "\(response.message) Try once more.",
-                                explanation: decision.message,
-                                target: target,
-                                overlay: response.action?.overlay ?? .spotlight
-                            ))
-                        }
-                        try self.transition(.instructionPresented(expectsChange: true))
-                        let retryScene = await self.scenePreparedForObservation(from: newScene)
-                        self.beginObservation(from: retryScene)
-                        return
+                        latestUnconfirmedScene = newScene
+                        continue
                     }
 
+                    self.accessibilityChangeObserver.stop()
+                    try self.transition(.meaningfulChangeDetected)
+                    self.currentScene = newScene
+                    self.statusMessage = "Verifying the result…"
+                    self.overlay.dismiss()
+                    self.prompt.showThinking(message: self.statusMessage) { [weak self] in
+                        self?.cancel()
+                    }
                     self.resetRecoveryAttempts()
                     self.recordCompletedStep(from: baseline)
                     let hasNextStep = self.activeGuide.map {
@@ -886,11 +865,13 @@ final class BeaconController: ObservableObject {
             }
             guard !Task.isCancelled, let self, self.observationID == identifier else { return }
             self.accessibilityChangeObserver.stop()
-            let attempt = self.incrementRecoveryAttempt(noChange: true)
+            let noChange = latestUnconfirmedScene == nil
+            let retryBaseline = latestUnconfirmedScene ?? baseline
+            let attempt = self.incrementRecoveryAttempt(noChange: noChange)
             let decision = self.guidePolicyRegistry.recoveryDecision(
                 for: baseline.activeApplication.bundleIdentifier,
                 attempt: attempt,
-                noChange: true,
+                noChange: noChange,
                 expectedDescription: self.currentResponse?.expectedOutcome?.description
             )
             if decision.action == .retry {
@@ -903,7 +884,7 @@ final class BeaconController: ObservableObject {
                         overlay: response.action?.overlay ?? .spotlight
                     ))
                 }
-                self.beginObservation(from: await self.scenePreparedForObservation(from: baseline))
+                self.beginObservation(from: await self.scenePreparedForObservation(from: retryBaseline))
             } else {
                 self.stopGuideAfterRecovery(message: decision.message)
             }

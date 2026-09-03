@@ -47,7 +47,9 @@ struct SceneFreshnessValidator: Sendable {
                 application: source.activeApplication.name
             )
         }
-        guard SceneSemanticFingerprint(source) == SceneSemanticFingerprint(latest) else {
+        guard !SceneSemanticFingerprint(source).isMateriallyDifferent(
+            from: SceneSemanticFingerprint(latest)
+        ) else {
             return .interfaceChanged(application: source.activeApplication.name)
         }
         return nil
@@ -83,7 +85,8 @@ struct SceneFreshnessValidator: Sendable {
                     : .targetUnavailable(label: label, application: source.activeApplication.name)
                 return .stale(issue)
             }
-            guard original.map(ElementIdentity.init) == ElementIdentity(current) else {
+            guard current.enabled,
+                  original.map(ElementIdentity.init) == ElementIdentity(current) else {
                 return .stale(.targetUnavailable(
                     label: original?.bestLabel ?? current.bestLabel,
                     application: source.activeApplication.name
@@ -94,7 +97,9 @@ struct SceneFreshnessValidator: Sendable {
             refreshedTarget = target
         }
 
-        guard SceneSemanticFingerprint(source) == SceneSemanticFingerprint(latest) else {
+        guard !SceneSemanticFingerprint(source).isMateriallyDifferent(
+            from: SceneSemanticFingerprint(latest)
+        ) else {
             return .stale(.interfaceChanged(application: source.activeApplication.name))
         }
         return .valid(target: refreshedTarget)
@@ -105,32 +110,44 @@ struct SceneFreshnessValidator: Sendable {
     }
 }
 
-private struct SceneSemanticFingerprint: Equatable {
-    let elements: [ElementIdentity]
+private struct SceneSemanticFingerprint {
+    private static let maximumToleratedDifferenceRatio = 0.25
+    let elementCounts: [ElementIdentity: Int]
 
     init(_ scene: ScreenScene) {
-        elements = scene.elements.map(ElementIdentity.init).sorted { $0.id < $1.id }
+        elementCounts = scene.elements.reduce(into: [:]) { counts, element in
+            counts[ElementIdentity(element), default: 0] += 1
+        }
+    }
+
+    func isMateriallyDifferent(from other: SceneSemanticFingerprint) -> Bool {
+        let sourceCount = elementCounts.values.reduce(0, +)
+        let latestCount = other.elementCounts.values.reduce(0, +)
+        let maximumCount = max(sourceCount, latestCount)
+        guard maximumCount > 0 else { return false }
+
+        let sharedCount = elementCounts.reduce(into: 0) { count, entry in
+            count += min(entry.value, other.elementCounts[entry.key, default: 0])
+        }
+        let differenceRatio = Double(maximumCount - sharedCount) / Double(maximumCount)
+        return differenceRatio > Self.maximumToleratedDifferenceRatio
     }
 }
 
-private struct ElementIdentity: Equatable {
-    let id: String
+private struct ElementIdentity: Equatable, Hashable {
     let role: String?
     let subrole: String?
     let label: String?
     let title: String?
-    let value: String?
-    let enabled: Bool
-    let focused: Bool
 
     init(_ element: UIElementDescriptor) {
-        id = element.id
-        role = element.role
-        subrole = element.subrole
-        label = element.label
-        title = element.title
-        value = element.value
-        enabled = element.enabled
-        focused = element.focused
+        role = Self.normalized(element.role)
+        subrole = Self.normalized(element.subrole)
+        label = Self.normalized(element.label)
+        title = Self.normalized(element.title)
+    }
+
+    private static func normalized(_ value: String?) -> String? {
+        value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 }
