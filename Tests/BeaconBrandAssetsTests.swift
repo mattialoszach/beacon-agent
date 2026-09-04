@@ -12,20 +12,26 @@ final class BeaconBrandAssetsTests: XCTestCase {
         XCTAssertLessThanOrEqual(BeaconBrandAssets.menuBarLogo?.size.width ?? .infinity, 18)
     }
 
-    func testAppIconHasTransparentRoundedCorners() throws {
+    func testAppIconUsesPaddedHighResolutionArtwork() throws {
         let image = try XCTUnwrap(BeaconBrandAssets.appIcon)
         let data = try XCTUnwrap(image.tiffRepresentation)
         let bitmap = try XCTUnwrap(NSBitmapImageRep(data: data))
+
+        XCTAssertEqual(bitmap.pixelsWide, 1_024)
+        XCTAssertEqual(bitmap.pixelsHigh, 1_024)
+        XCTAssertTrue(bitmap.hasAlpha)
+
         let maxX = bitmap.pixelsWide - 1
         let maxY = bitmap.pixelsHigh - 1
-
-        let cornerAlpha = [
-            bitmap.colorAt(x: 0, y: 0)?.alphaComponent,
-            bitmap.colorAt(x: maxX, y: 0)?.alphaComponent,
-            bitmap.colorAt(x: 0, y: maxY)?.alphaComponent,
-            bitmap.colorAt(x: maxX, y: maxY)?.alphaComponent
+        let midX = maxX / 2
+        let midY = maxY / 2
+        let outerEdgeAlpha = [
+            bitmap.colorAt(x: midX, y: 0)?.alphaComponent,
+            bitmap.colorAt(x: midX, y: maxY)?.alphaComponent,
+            bitmap.colorAt(x: 0, y: midY)?.alphaComponent,
+            bitmap.colorAt(x: maxX, y: midY)?.alphaComponent
         ]
 
-        XCTAssertTrue(cornerAlpha.allSatisfy { ($0 ?? 1) == 0 })
+        XCTAssertTrue(outerEdgeAlpha.allSatisfy { ($0 ?? 1) == 0 })
     }
 }
