@@ -26,6 +26,45 @@ final class StepVerifierTests: XCTestCase {
         XCTAssertTrue(StepVerifier().verify(expected: expected, before: before, after: after).succeeded)
     }
 
+    func testWindowAppearanceAcceptsApplicationHandoff() {
+        let before = scene(
+            title: "Source",
+            labels: ["Open destination"],
+            bundleIdentifier: "test.source"
+        )
+        let after = scene(
+            title: "Destination",
+            labels: ["Result"],
+            bundleIdentifier: "test.destination"
+        )
+        let expected = ExpectedOutcome(
+            type: .windowAppears,
+            description: "The destination window appears",
+            applicationScope: .mayChange
+        )
+
+        XCTAssertTrue(StepVerifier().verify(expected: expected, before: before, after: after).succeeded)
+    }
+
+    func testWindowAppearanceRejectsUnrelatedApplicationHandoff() {
+        let before = scene(
+            title: "Source",
+            labels: ["Open a window"],
+            bundleIdentifier: "test.source"
+        )
+        let after = scene(
+            title: "Other",
+            labels: ["Unrelated content"],
+            bundleIdentifier: "test.unrelated"
+        )
+        let expected = ExpectedOutcome(
+            type: .windowAppears,
+            description: "A window appears"
+        )
+
+        XCTAssertFalse(StepVerifier().verify(expected: expected, before: before, after: after).succeeded)
+    }
+
     func testUnrelatedFocusChangeDoesNotSatisfyElementAppearance() {
         let before = scene(title: "Document", labels: ["File", "Edit"])
         let after = scene(title: "Document", labels: ["File", "Edit"])

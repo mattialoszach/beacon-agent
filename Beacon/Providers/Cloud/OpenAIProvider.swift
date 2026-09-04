@@ -72,7 +72,7 @@ struct OpenAIProvider: InstructorModel {
             "model": model,
             "store": false,
             "input": [
-                ["role": "developer", "content": [["type": "input_text", "text": "You are Beacon, a macOS UI instructor. Prefer supplied stable element IDs. If a numbered visual preview is present, use targetMark to select its exact badge for canvas, CAD, icon, or unlabeled targets. Otherwise use only listed visual bounds. Never invent an ID, mark, or coordinate. Give one short next step, account for completed steps, and mark taskComplete only when the overall task is done."]]],
+                ["role": "developer", "content": [["type": "input_text", "text": "You are Beacon, a macOS UI instructor. Prefer supplied stable element IDs. If a numbered visual preview is present, use targetMark to select its exact badge for canvas, CAD, icon, or unlabeled targets. Otherwise use only listed visual bounds. Never invent an ID, mark, or coordinate. Give one short next step, account for completed steps, and mark taskComplete only when the overall task is done. Set expectedOutcome.applicationScope to mayChange only when this step is expected to open or activate another application; otherwise use sameApplication."]]],
                 ["role": "user", "content": userContent]
             ],
             "text": ["format": [
@@ -131,10 +131,11 @@ struct OpenAIProvider: InstructorModel {
                         ["type": "null"],
                         [
                             "type": "object", "additionalProperties": false,
-                            "required": ["type", "description"],
+                            "required": ["type", "description", "applicationScope"],
                             "properties": [
                                 "type": ["type": "string", "enum": ["windowAppears", "windowDisappears", "focusedElementChanges", "elementAppears", "visualChange"]],
-                                "description": ["type": "string"]
+                                "description": ["type": "string"],
+                                "applicationScope": ["type": "string", "enum": ["sameApplication", "mayChange"]]
                             ]
                         ]
                     ]

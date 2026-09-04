@@ -25,7 +25,7 @@ This repository contains the native v0.1 grounding prototype and verified multi-
 - Typed provider boundary, Apple Foundation Models adapter, and optional OpenAI adapter
 - Bounded model contexts with native structured Apple Foundation Models output
 - Verified multi-step guides with an eight-step safety limit
-- Expected-outcome verification across intermediate Accessibility events, with a bounded low-rate fallback
+- Expected-outcome verification across intermediate Accessibility events and new-window app handoffs, with a bounded low-rate fallback
 - Tested recovery recipes for TextEdit, Preview, Finder, Safari, and System Settings
 - ScreenCaptureKit privacy preview with local password, email, phone, card, and API-key redaction
 - Per-application capture exclusions plus separate cloud-text and redacted-image opt-ins

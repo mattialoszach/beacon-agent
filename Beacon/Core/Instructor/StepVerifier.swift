@@ -12,7 +12,13 @@ struct StepVerifier: Sendable {
         after: ScreenScene,
         visualDifference: Double? = nil
     ) -> StepVerification {
-        if before.activeApplication.bundleIdentifier != after.activeApplication.bundleIdentifier {
+        let applicationChanged = before.activeApplication.processIdentifier
+            != after.activeApplication.processIdentifier
+            || before.activeApplication.bundleIdentifier != after.activeApplication.bundleIdentifier
+        if applicationChanged,
+           expected?.type != .windowAppears
+            || expected?.applicationScope != .mayChange
+            || after.activeWindow == nil {
             return StepVerification(
                 succeeded: false,
                 explanation: "The active application changed before Beacon could confirm the expected result."
@@ -32,7 +38,7 @@ struct StepVerifier: Sendable {
         let success: Bool
         switch expected.type {
         case .windowAppears:
-            success = windowChanged || afterLabels.subtracting(beforeLabels).count >= 2
+            success = applicationChanged || windowChanged || afterLabels.subtracting(beforeLabels).count >= 2
         case .windowDisappears:
             success = windowChanged || beforeLabels.subtracting(afterLabels).count >= 2
         case .focusedElementChanges:
@@ -60,6 +66,7 @@ struct StepVerifier: Sendable {
             return previous != ControlState(value: element.value, enabled: element.enabled)
         }
     }
+
 }
 
 private struct ControlState: Equatable {

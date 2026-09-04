@@ -4,17 +4,24 @@ import XCTest
 
 final class ModelResponseParsingTests: XCTestCase {
     func testDecodesTypedStructuredResponse() throws {
-        let json = #"{"message":"Click Export","action":{"type":"pointToElement","targetElementId":"e_13","targetBounds":null,"overlay":"spotlight"},"expectedOutcome":{"type":"windowAppears","description":"Export dialog appears"}}"#
+        let json = #"{"message":"Click Export","action":{"type":"pointToElement","targetElementId":"e_13","targetBounds":null,"overlay":"spotlight"},"expectedOutcome":{"type":"windowAppears","description":"Export dialog appears","applicationScope":"sameApplication"}}"#
         let response = try JSONDecoder().decode(InstructorResponse.self, from: Data(json.utf8))
 
         XCTAssertEqual(response.message, "Click Export")
         XCTAssertEqual(response.action?.targetElementId, "e_13")
         XCTAssertEqual(response.action?.overlay, .spotlight)
         XCTAssertEqual(response.expectedOutcome?.type, .windowAppears)
+        XCTAssertEqual(response.expectedOutcome?.applicationScope, .sameApplication)
     }
 
     func testRejectsUnknownOverlayValue() {
         let json = #"{"message":"Click Export","action":{"type":"pointToElement","targetElementId":"e_13","targetBounds":null,"overlay":"modelDrawsAnything"},"expectedOutcome":null}"#
+        XCTAssertThrowsError(try JSONDecoder().decode(InstructorResponse.self, from: Data(json.utf8)))
+    }
+
+    func testRejectsUnknownExpectedApplicationScope() {
+        let json = #"{"message":"Open it","action":null,"expectedOutcome":{"type":"windowAppears","description":"A window appears","applicationScope":"alwaysChange"}}"#
+
         XCTAssertThrowsError(try JSONDecoder().decode(InstructorResponse.self, from: Data(json.utf8)))
     }
 

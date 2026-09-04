@@ -28,6 +28,8 @@ struct AppleFoundationModelProvider: InstructorModel {
         choose a listed mark number for a visual fallback. Give exactly one next step. Never invent an element
         ID, mark, or coordinate. If the task is already done,
         choose complete. If no listed control is useful, choose explain and say what the user should reveal.
+        Set expectedApplicationScope to mayChange only when this step should open or activate another app;
+        otherwise use sameApplication.
         """)
         let response = try await session.respond(
             to: "Question: \(request.question)\n\(context.text)",
@@ -47,6 +49,9 @@ struct AppleFoundationModelProvider: InstructorModel {
         }
         let actionType = ActionType(rawValue: payload.actionType) ?? .explain
         let expectedType = ExpectedOutcomeType(rawValue: payload.expectedOutcomeType)
+        let expectedApplicationScope = ExpectedApplicationScope(
+            rawValue: payload.expectedApplicationScope
+        ) ?? .sameApplication
         let action: SuggestedAction? = actionType == .pointToElement
             ? SuggestedAction(
                 type: .pointToElement,
@@ -60,7 +65,11 @@ struct AppleFoundationModelProvider: InstructorModel {
             message: payload.message,
             action: action,
             expectedOutcome: expectedType.map {
-                ExpectedOutcome(type: $0, description: payload.expectedOutcomeDescription)
+                ExpectedOutcome(
+                    type: $0,
+                    description: payload.expectedOutcomeDescription,
+                    applicationScope: expectedApplicationScope
+                )
             },
             taskComplete: payload.taskComplete || actionType == .complete
         )
@@ -93,6 +102,9 @@ private struct AppleInstructionPayload {
 
     @Guide(description: "One short description of the expected result")
     let expectedOutcomeDescription: String
+
+    @Guide(description: "Whether the expected result stays in this app or may open another app", .anyOf(["sameApplication", "mayChange"]))
+    let expectedApplicationScope: String
 
     @Guide(description: "True only when the user's overall task is complete")
     let taskComplete: Bool

@@ -49,9 +49,25 @@ enum ExpectedOutcomeType: String, Codable, Sendable {
     case visualChange
 }
 
+enum ExpectedApplicationScope: String, Codable, Sendable {
+    case sameApplication
+    case mayChange
+}
+
 struct ExpectedOutcome: Codable, Equatable, Sendable {
     let type: ExpectedOutcomeType
     let description: String
+    let applicationScope: ExpectedApplicationScope
+
+    init(
+        type: ExpectedOutcomeType,
+        description: String,
+        applicationScope: ExpectedApplicationScope = .sameApplication
+    ) {
+        self.type = type
+        self.description = description
+        self.applicationScope = applicationScope
+    }
 }
 
 struct InstructorResponse: Codable, Equatable, Sendable {
