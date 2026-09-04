@@ -12,7 +12,13 @@ let package = Package(
         .executableTarget(
             name: "Beacon",
             path: "Beacon",
-            exclude: ["Resources/Info.plist"]
+            exclude: [
+                "Resources/AppIcon.icns",
+                "Resources/Info.plist"
+            ],
+            resources: [
+                .process("Resources/Images")
+            ]
         ),
         .testTarget(
             name: "BeaconTests",

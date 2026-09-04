@@ -33,26 +33,40 @@ struct MainWindowView: View {
 
     var body: some View {
         NavigationSplitView {
-            List(visibleSections) { section in
-                Button {
-                    selection = section
-                } label: {
-                    Label(section.rawValue, systemImage: section.icon)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 5)
-                        .contentShape(Rectangle())
-                        .background(
-                            selection == section ? BeaconPalette.blueViolet : .clear,
-                            in: RoundedRectangle(cornerRadius: 6)
-                        )
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    BeaconLogo(appearance: .white)
+                        .frame(width: 24, height: 20)
+                    Text("Beacon")
+                        .font(.headline)
+                    Spacer()
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(selection == section ? .white : .primary)
-                .listRowBackground(Color.clear)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .accessibilityElement(children: .combine)
+
+                Divider()
+
+                List(visibleSections) { section in
+                    Button {
+                        selection = section
+                    } label: {
+                        Label(section.rawValue, systemImage: section.icon)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 5)
+                            .contentShape(Rectangle())
+                            .background(
+                                selection == section ? BeaconPalette.blueViolet : .clear,
+                                in: RoundedRectangle(cornerRadius: 6)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(selection == section ? .white : .primary)
+                    .listRowBackground(Color.clear)
+                }
+                .listStyle(.sidebar)
             }
-            .listStyle(.sidebar)
-            .navigationTitle("Beacon")
             .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 280)
             .safeAreaInset(edge: .bottom) {
                 StatusPill()
@@ -114,9 +128,9 @@ private struct HomeView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Image(systemName: "scope")
-                        .font(.system(size: 34, weight: .medium))
-                        .foregroundStyle(BeaconPalette.blueViolet)
+                    BeaconLogo()
+                        .frame(width: 68, height: 56, alignment: .leading)
+                        .accessibilityHidden(true)
                     Text("Ask. See. Do.")
                         .font(.system(size: 34, weight: .bold, design: .rounded))
                     Text("Beacon finds real controls in the app you're using and points you to the next step. You stay in control.")

@@ -23,8 +23,7 @@ struct BeaconApp: App {
                 .environmentObject(controller)
                 .tint(BeaconPalette.blueViolet)
         } label: {
-            Image(systemName: controller.isObserving ? "scope" : "scope")
-                .symbolVariant(controller.isObserving ? .fill : .none)
+            BeaconMenuBarLogo()
         }
 
         Settings {
@@ -42,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var previewPrompt: FloatingPromptController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.applicationIconImage = BeaconBrandAssets.appIcon
         NSApp.setActivationPolicy(.regular)
         guard BeaconLaunchOptions.isThinkingPreview(arguments: CommandLine.arguments) else { return }
 
