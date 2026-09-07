@@ -2,6 +2,7 @@ import Foundation
 
 struct ModelSceneContext: Equatable, Sendable {
     let text: String
+    let userPrompt: String
     let includedElementIDs: Set<String>
     let includedVisualElementIDs: Set<String>
     let includedMarkIDs: Set<Int>
@@ -16,19 +17,23 @@ struct ModelContextBuilder: Sendable {
     let maximumCharacters: Int
 
     init(maximumElements: Int = 48, maximumCharacters: Int = 6_000) {
-        self.maximumElements = maximumElements
-        self.maximumCharacters = maximumCharacters
+        self.maximumElements = max(0, maximumElements)
+        self.maximumCharacters = max(0, maximumCharacters)
     }
 
     func build(for request: InstructorRequest) -> ModelSceneContext {
-        let queryTokens = tokens(request.question)
+        let question = String(request.question.prefix(min(1_000, maximumCharacters / 4)))
+        let questionLine = String("Question: \(question)\n".prefix(maximumCharacters))
+        let contextBudget = maximumCharacters - questionLine.count
+        let header = header(for: request, budget: contextBudget / 2)
+        let queryTokens = tokens(question)
         let windowBounds = request.scene.activeWindow?.bounds
-        let marksByElementID = Dictionary(uniqueKeysWithValues: request.setOfMarks.compactMap { mark in
+        let marksByElementID = Dictionary(request.setOfMarks.compactMap { mark in
             mark.elementID.map { ($0, mark.id) }
-        })
-        let marksByVisualElementID = Dictionary(uniqueKeysWithValues: request.setOfMarks.compactMap { mark in
+        }, uniquingKeysWith: { first, _ in first })
+        let marksByVisualElementID = Dictionary(request.setOfMarks.compactMap { mark in
             mark.visualElementID.map { ($0, mark.id) }
-        })
+        }, uniquingKeysWith: { first, _ in first })
         let ranked = request.scene.elements
             .filter { $0.enabled && $0.bounds?.isValid == true }
             .map { element in
@@ -43,11 +48,11 @@ struct ModelContextBuilder: Sendable {
         var lines: [String] = []
         var ids = Set<String>()
         var markIDs = Set<Int>()
-        var characterCount = 0
+        var characterCount = header.count
         for candidate in ranked.prefix(maximumElements) {
             let markID = marksByElementID[candidate.element.id]
             let line = promptLine(for: candidate.element, markID: markID)
-            guard characterCount + line.count + 1 <= maximumCharacters else { break }
+            guard characterCount + line.count + 1 <= contextBudget else { continue }
             lines.append(line)
             ids.insert(candidate.element.id)
             if let markID { markIDs.insert(markID) }
@@ -55,7 +60,8 @@ struct ModelContextBuilder: Sendable {
         }
 
         let selectedVisualElements = request.scene.visualElements
-            .sorted { $0.confidence > $1.confidence }
+            .filter { $0.bounds.isValid && $0.confidence.isFinite && (0...1).contains($0.confidence) }
+            .sorted { $0.confidence == $1.confidence ? $0.id < $1.id : $0.confidence > $1.confidence }
             .prefix(max(0, min(20, maximumElements - lines.count)))
         var visualIDs = Set<String>()
         for visual in selectedVisualElements {
@@ -63,7 +69,7 @@ struct ModelContextBuilder: Sendable {
             let markID = marksByVisualElementID[visual.id]
             let mark = markID.map { " mark=\($0)" } ?? ""
             let line = "[\(visual.id)\(mark)] visual=\(visual.kind.rawValue) \"\(sanitized(visual.bestLabel, limit: 100))\" confidence=\(Int(visual.confidence * 100))% bounds=\(bounds)"
-            guard characterCount + line.count + 1 <= maximumCharacters else { continue }
+            guard characterCount + line.count + 1 <= contextBudget else { continue }
             lines.append(line)
             visualIDs.insert(visual.id)
             if let markID { markIDs.insert(markID) }
@@ -71,28 +77,36 @@ struct ModelContextBuilder: Sendable {
         }
 
         let omitted = max(0, request.scene.elements.count - ids.count)
-        let completed = request.guideContext?.completedSteps.map {
-            "Step \($0.number): \($0.instruction) [\($0.targetLabel ?? $0.targetElementID ?? "no target")]"
-        }.joined(separator: "\n")
-        let guide = request.guideContext.map {
-            "Current guide step: \($0.stepNumber) of at most \($0.maximumSteps)\nCompleted steps:\n\(completed?.isEmpty == false ? completed! : "None")"
-        } ?? ""
-        let header = """
-        Application: \(sanitized(request.scene.activeApplication.name, limit: 100))
-        Window: \(sanitized(request.scene.activeWindow?.title ?? "Unknown", limit: 140))
-        Mode: \(request.mode.rawValue)
-        \(guide)
-        Visible controls (ranked; \(omitted) lower-priority controls omitted).
-        Prefer stable element IDs. A mark number refers to the same numbered region in the local visual preview:
-        """
+        let text = header + lines.map { "\n" + $0 }.joined()
         return ModelSceneContext(
-            text: header + "\n" + lines.joined(separator: "\n"),
+            text: text,
+            userPrompt: questionLine + text,
             includedElementIDs: ids,
             includedVisualElementIDs: visualIDs,
             includedMarkIDs: markIDs,
             includedElementCount: ids.count,
             omittedElementCount: omitted
         )
+    }
+
+    private func header(for request: InstructorRequest, budget: Int) -> String {
+        var header = """
+        Application: \(sanitized(request.scene.activeApplication.name, limit: 100))
+        Window: \(sanitized(request.scene.activeWindow?.title ?? "Unknown", limit: 140))
+        Mode: \(request.mode.rawValue)
+        """
+        if let guide = request.guideContext {
+            header += "\nGuide step: \(guide.stepNumber)/\(guide.maximumSteps). Completed steps:"
+            let steps = guide.completedSteps.suffix(8)
+            let lineBudget = max(0, (budget - header.count) / max(1, steps.count))
+            for step in steps {
+                let prefix = "\nStep \(step.number): "
+                let fieldBudget = max(0, (lineBudget - prefix.count - 3) / 2)
+                header += prefix + sanitized(step.instruction, limit: min(160, fieldBudget))
+                    + " [" + sanitized(step.targetLabel ?? "no target", limit: min(80, fieldBudget)) + "]"
+            }
+        }
+        return String(header.prefix(budget))
     }
 
     private func score(
@@ -116,7 +130,9 @@ struct ModelContextBuilder: Sendable {
         let label = sanitized(element.bestLabel, limit: 120)
         let flags = [element.focused ? "focused" : nil].compactMap { $0 }.joined(separator: ",")
         let mark = markID.map { " mark=\($0)" } ?? ""
-        return "[\(element.id)\(mark)] \(role) \"\(label)\"\(flags.isEmpty ? "" : " (\(flags))")"
+        let value = ["AXCheckBox", "AXRadioButton", "AXPopUpButton"].contains(element.role ?? "")
+            ? element.value.map { " value=\"\(sanitized($0, limit: 80))\"" } ?? "" : ""
+        return "[\(element.id)\(mark)] \(role) \"\(label)\"\(value)\(flags.isEmpty ? "" : " (\(flags))")"
     }
 
     private func tokens(_ text: String) -> Set<String> {

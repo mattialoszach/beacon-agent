@@ -69,11 +69,15 @@ final class AccessibilityChangeObserver {
     }
 
     private func configureObserver(for processIdentifier: Int32) -> Bool {
+        AccessibilityMessagingTimeout.applyProcessWideDefault()
         var createdObserver: AXObserver?
         guard AXObserverCreate(processIdentifier, accessibilityChangeCallback, &createdObserver) == .success,
               let createdObserver else { return false }
         observer = createdObserver
         let app = AXUIElementCreateApplication(processIdentifier)
+        // Registration and the callback below run on the main run loop, so every read
+        // must be bounded or an unresponsive target application freezes Beacon's UI.
+        AXUIElementSetMessagingTimeout(app, AccessibilityMessagingTimeout.seconds)
         applicationElement = app
         register(
             app,
@@ -144,7 +148,9 @@ final class AccessibilityChangeObserver {
         guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
               let value,
               CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
-        return unsafeBitCast(value, to: AXUIElement.self)
+        let copied = unsafeBitCast(value, to: AXUIElement.self)
+        AXUIElementSetMessagingTimeout(copied, AccessibilityMessagingTimeout.seconds)
+        return copied
     }
 }
 

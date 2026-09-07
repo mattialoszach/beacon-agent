@@ -3,6 +3,16 @@ import XCTest
 @testable import Beacon
 
 final class ModelResponseParsingTests: XCTestCase {
+    func testDecodesSpecificOutcomeAndPreservesLegacyConfirmationFallback() throws {
+        let json = #"{"message":"Choose PDF","action":null,"expectedOutcome":{"type":"visualChange","description":"Format is PDF","applicationScope":"sameApplication","element":{"id":null,"labels":["Format"],"role":"AXPopUpButton","value":"PDF"},"windowTitle":null,"destinationBundleIdentifier":null}}"#
+        let response = try JSONDecoder().decode(InstructorResponse.self, from: Data(json.utf8))
+        XCTAssertEqual(response.expectedOutcome?.element?.value, "PDF")
+        XCTAssertEqual(response.expectedOutcome?.canVerifyAutomatically, true)
+        let legacy = #"{"type":"visualChange","description":"The interface changes","applicationScope":"sameApplication"}"#
+        let outcome = try JSONDecoder().decode(ExpectedOutcome.self, from: Data(legacy.utf8))
+        XCTAssertFalse(outcome.canVerifyAutomatically)
+    }
+
     func testDecodesTypedStructuredResponse() throws {
         let json = #"{"message":"Click Export","action":{"type":"pointToElement","targetElementId":"e_13","targetBounds":null,"overlay":"spotlight"},"expectedOutcome":{"type":"windowAppears","description":"Export dialog appears","applicationScope":"sameApplication"}}"#
         let response = try JSONDecoder().decode(InstructorResponse.self, from: Data(json.utf8))
@@ -145,5 +155,155 @@ final class ModelResponseParsingTests: XCTestCase {
             guard let content = message["content"] as? [[String: Any]] else { return false }
             return content.contains { $0["type"] as? String == "input_image" }
         }
+    }
+
+    func testOpenAIDecodesMessageAfterReasoningItemWithoutContent() throws {
+        let response = try OpenAIProvider(model: "test", apiKey: "unused").decodeResponse(
+            envelope(status: "completed"), for: emptyRequest()
+        )
+        XCTAssertEqual(response.message, "Ready")
+    }
+
+    func testOpenAIRejectsIncompleteOutputEvenWhenItContainsValidJSON() throws {
+        XCTAssertThrowsError(try OpenAIProvider(model: "test", apiKey: "unused").decodeResponse(
+            envelope(status: "incomplete"), for: emptyRequest()
+        ))
+    }
+
+    func testOpenAIUsesTheExactBoundedPrompt() throws {
+        let request = emptyRequest()
+        let body = OpenAIProvider(model: "test", apiKey: "unused").requestBody(for: request)
+        let input = try XCTUnwrap(body["input"] as? [[String: Any]])
+        let user = try XCTUnwrap(input.last?["content"] as? [[String: Any]])
+        XCTAssertEqual(user.first?["text"] as? String,
+                       ModelContextBuilder(maximumElements: 100, maximumCharacters: 12_000)
+                        .build(for: request).userPrompt)
+    }
+
+    private func envelope(status: String) throws -> Data {
+        let payload = #"{"message":"Ready","action":null,"expectedOutcome":null,"taskComplete":false}"#
+        return try JSONSerialization.data(withJSONObject: [
+            "status": status,
+            "output": [
+                ["type": "reasoning", "summary": []],
+                ["type": "message", "content": [["type": "output_text", "text": payload]]]
+            ]
+        ])
+    }
+
+    private func emptyRequest() -> InstructorRequest {
+        InstructorRequest(question: "Explain", scene: ScreenScene(
+            timestamp: Date(),
+            activeApplication: .init(name: "Fixture", bundleIdentifier: "test.fixture", processIdentifier: 1),
+            activeWindow: nil, screenshot: nil, elements: [], displays: []
+        ), mode: .ask)
+    }
+}
+
+/// Provider-level validation of cloud output: nothing invented may reach grounding, and
+/// a readable refusal or truncation must be reported as such.
+final class OpenAIResponseValidationTests: XCTestCase {
+    private let provider = OpenAIProvider(model: "test", apiKey: "unused")
+
+    func testHallucinatedElementIDIsRejected() {
+        let payload = #"""
+        {"message":"Click it","action":{"type":"pointToElement","targetElementId":"e_999",
+        "targetBounds":null,"targetMark":null,"overlay":"spotlight"},
+        "expectedOutcome":null,"taskComplete":false}
+        """#
+        XCTAssertThrowsError(try provider.decodeResponse(completed(payload), for: request())) { error in
+            XCTAssertEqual(error as? GroundingError, .elementNotFound("e_999"))
+        }
+    }
+
+    func testOutOfRangeBoundsAreRejected() {
+        let payload = #"""
+        {"message":"Look here","action":{"type":"pointToElement","targetElementId":null,
+        "targetBounds":{"x":0.95,"y":0.1,"width":0.2,"height":0.1},"targetMark":null,
+        "overlay":"rectangle"},"expectedOutcome":null,"taskComplete":false}
+        """#
+        XCTAssertThrowsError(try provider.decodeResponse(completed(payload), for: request())) { error in
+            XCTAssertEqual(error as? GroundingError, .invalidBounds)
+        }
+    }
+
+    func testMarkThatIsNotInTheTableIsRejected() {
+        let payload = #"""
+        {"message":"Use badge three","action":{"type":"pointToElement","targetElementId":null,
+        "targetBounds":null,"targetMark":3,"overlay":"rectangle"},
+        "expectedOutcome":null,"taskComplete":false}
+        """#
+        XCTAssertThrowsError(try provider.decodeResponse(completed(payload), for: request())) { error in
+            XCTAssertEqual(error as? GroundingError, .markNotFound(3))
+        }
+    }
+
+    func testWhitespaceOnlyMessageIsRejected() {
+        let payload = #"{"message":"   ","action":null,"expectedOutcome":null,"taskComplete":false}"#
+        XCTAssertThrowsError(try provider.decodeResponse(completed(payload), for: request())) { error in
+            XCTAssertEqual(error as? CloudProviderError, .invalidResponse)
+        }
+    }
+
+    func testKnownElementIDIsAccepted() throws {
+        let payload = #"""
+        {"message":"Choose Save","action":{"type":"pointToElement","targetElementId":"e_save",
+        "targetBounds":null,"targetMark":null,"overlay":"spotlight"},
+        "expectedOutcome":null,"taskComplete":false}
+        """#
+        let response = try provider.decodeResponse(completed(payload), for: request())
+        XCTAssertEqual(response.action?.targetElementId, "e_save")
+    }
+
+    func testRefusalIsReportedAsARefusalNotAnUnreadableResponse() throws {
+        let data = try JSONSerialization.data(withJSONObject: [
+            "status": "completed",
+            "output": [["type": "message", "content": [
+                ["type": "refusal", "refusal": "I can't help with that."]
+            ]]]
+        ])
+        XCTAssertThrowsError(try provider.decodeResponse(data, for: request())) { error in
+            XCTAssertEqual(error as? CloudProviderError, .refused("I can't help with that."))
+        }
+    }
+
+    func testTruncatedResponseReportsItsReason() throws {
+        let data = try JSONSerialization.data(withJSONObject: [
+            "status": "incomplete",
+            "incomplete_details": ["reason": "max_output_tokens"],
+            "output": []
+        ])
+        XCTAssertThrowsError(try provider.decodeResponse(data, for: request())) { error in
+            XCTAssertEqual(error as? CloudProviderError, .incomplete("max_output_tokens"))
+            XCTAssertTrue(
+                error.localizedDescription.contains("smaller part"),
+                "The message must tell the user what to do: \(error.localizedDescription)"
+            )
+        }
+    }
+
+    private func completed(_ payload: String) -> Data {
+        let escaped = payload
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        return Data(#"{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"\#(escaped)"}]}]}"#.utf8)
+    }
+
+    private func request() -> InstructorRequest {
+        InstructorRequest(question: "How do I save?", scene: ScreenScene(
+            timestamp: Date(),
+            activeApplication: .init(name: "Fixture", bundleIdentifier: "test.fixture", processIdentifier: 1),
+            activeWindow: nil,
+            screenshot: nil,
+            elements: [
+                UIElementDescriptor(
+                    id: "e_save", role: "AXButton", subrole: nil, label: "Save", title: nil,
+                    value: nil, enabled: true, focused: false,
+                    bounds: .init(x: 0.1, y: 0.1, width: 0.1, height: 0.05), windowID: nil
+                )
+            ],
+            displays: []
+        ), mode: .guide)
     }
 }

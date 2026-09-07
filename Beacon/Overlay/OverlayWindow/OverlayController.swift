@@ -10,10 +10,19 @@ final class OverlayController {
         let debugElements: [UIElementDescriptor]
     }
 
-    private var panels: [NSPanel] = []
+    private struct OverlayPanel {
+        let panel: NSPanel
+        let hostingView: NSHostingView<OverlayCanvasView>
+        /// The screen frame this panel was built for, in global AppKit coordinates.
+        let screenFrame: CGRect
+    }
+
+    private var panels: [OverlayPanel] = []
     private let cursorPositionMonitor: CursorPositionMonitor
     private var escapeMonitor: Any?
+    private var localEscapeMonitor: Any?
     private var isMonitoringCursor = false
+    private var cursorMovementBaseline: UInt64 = 0
     private(set) var presentation: Presentation?
     var onDismiss: (() -> Void)?
 
@@ -28,7 +37,7 @@ final class OverlayController {
     func showInstruction(_ instruction: VisualInstruction) {
         show(Presentation(
             target: instruction.target,
-            instruction: instruction.text,
+            instruction: [instruction.text, instruction.explanation].compactMap { $0 }.joined(separator: "\n"),
             style: instruction.overlay,
             debugElements: []
         ))
@@ -64,16 +73,19 @@ final class OverlayController {
     }
 
     func dismiss() {
-        panels.forEach { $0.orderOut(nil) }
+        panels.forEach { $0.panel.orderOut(nil) }
         panels.removeAll()
         presentation = nil
         if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) }
+        if let localEscapeMonitor { NSEvent.removeMonitor(localEscapeMonitor) }
         escapeMonitor = nil
+        localEscapeMonitor = nil
         endCursorMonitoring()
     }
 
     private func show(_ presentation: Presentation) {
         self.presentation = presentation
+        cursorMovementBaseline = cursorPositionMonitor.presentationBaseline()
         let mapper = DisplayGeometryProvider().currentMapper()
 
         if !panels.isEmpty {
@@ -84,42 +96,80 @@ final class OverlayController {
         beginCursorMonitoring()
 
         for screen in NSScreen.screens {
-            let panel = ClickThroughPanel(
-                contentRect: screen.frame,
-                styleMask: [.borderless, .nonactivatingPanel],
-                backing: .buffered,
-                defer: false,
-                screen: screen
-            )
-            panel.level = .screenSaver
-            panel.backgroundColor = .clear
-            panel.isOpaque = false
-            panel.hasShadow = false
-            panel.ignoresMouseEvents = true
-            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-            panel.contentView = makeContent(presentation, screenFrame: screen.frame, mapper: mapper)
+            let panel = Self.makeOverlayPanel(screenFrame: screen.frame)
+            let hostingView = makeContent(presentation, screenFrame: screen.frame, mapper: mapper)
+            panel.contentView = hostingView
             panel.orderFrontRegardless()
-            panels.append(panel)
+            panels.append(
+                OverlayPanel(panel: panel, hostingView: hostingView, screenFrame: screen.frame)
+            )
         }
 
         escapeMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard event.keyCode == 53 else { return }
+            guard event.keyCode == EscapeRouting.keyCode else { return }
             Task { @MainActor in
                 self?.dismiss()
                 self?.onDismiss?()
             }
         }
+        localEscapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard event.keyCode == EscapeRouting.keyCode, let self,
+                  self.handlesEscape(from: event.window) else {
+                return event
+            }
+            self.dismiss()
+            self.onDismiss?()
+            return nil
+        }
+    }
+
+    /// Builds one transparent, click-through panel covering a screen.
+    ///
+    /// `contentRect` is in global AppKit coordinates here. The `screen:` variant of this
+    /// initializer treats the rectangle as screen-relative, which places every panel on a
+    /// secondary display at twice that display's origin, off the virtual desktop.
+    static func makeOverlayPanel(screenFrame: CGRect) -> NSPanel {
+        let panel = ClickThroughPanel(
+            contentRect: screenFrame,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.setFrame(screenFrame, display: false)
+        panel.level = .screenSaver
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = false
+        // Release-blocking invariant: guidance must never intercept normal mouse input.
+        panel.ignoresMouseEvents = true
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        return panel
+    }
+
+    /// Overlay panels never become key, so the key window here is normally one of Beacon's
+    /// ordinary windows; a dialog in front of the user keeps its own Escape.
+    private func handlesEscape(from window: NSWindow?) -> Bool {
+        if let window, panels.contains(where: { $0.panel === window }) { return true }
+        return EscapeRouting.handlesEscape(from: window)
     }
 
     private func update(_ presentation: Presentation) {
+        // Observation ticks re-send an unchanged target; rebuilding the tree then would
+        // restart animations and repaint every display for nothing.
+        guard presentation != self.presentation else { return }
         self.presentation = presentation
         render(presentation, mapper: DisplayGeometryProvider().currentMapper())
     }
 
     private func render(_ presentation: Presentation, mapper: CoordinateSpaceMapper) {
-        for panel in panels {
-            let frame = panel.screen?.frame ?? panel.frame
-            panel.contentView = makeContent(presentation, screenFrame: frame, mapper: mapper)
+        for overlay in panels {
+            overlay.hostingView.rootView = OverlayCanvasView(
+                presentation: presentation,
+                screenFrame: overlay.screenFrame,
+                mapper: mapper,
+                cursorPositionMonitor: cursorPositionMonitor,
+                cursorMovementBaseline: cursorMovementBaseline
+            )
         }
     }
 
@@ -127,12 +177,13 @@ final class OverlayController {
         _ presentation: Presentation,
         screenFrame: CGRect,
         mapper: CoordinateSpaceMapper
-    ) -> NSView {
+    ) -> NSHostingView<OverlayCanvasView> {
         NSHostingView(rootView: OverlayCanvasView(
             presentation: presentation,
             screenFrame: screenFrame,
             mapper: mapper,
-            cursorPositionMonitor: cursorPositionMonitor
+            cursorPositionMonitor: cursorPositionMonitor,
+            cursorMovementBaseline: cursorMovementBaseline
         ))
     }
 

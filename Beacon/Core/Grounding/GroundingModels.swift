@@ -65,7 +65,9 @@ struct AccessibilityGrounder: GroundingStrategy {
         }
 
         if let bounds = intention.preferredBounds {
-            guard bounds.isValid else { throw GroundingError.invalidBounds }
+            guard bounds.isValid, bounds.isOnAnyDisplay(of: scene) else {
+                throw GroundingError.invalidBounds
+            }
             return .init(
                 target: .visualRegion(bounds: bounds),
                 confidence: 0.75,
@@ -89,7 +91,8 @@ struct VisualGrounder: GroundingStrategy {
     let name = "Visual"
 
     func resolve(intention: UIIntention, scene: ScreenScene) async throws -> GroundingResult {
-        guard let bounds = intention.preferredBounds, bounds.isValid else {
+        guard let bounds = intention.preferredBounds, bounds.isValid,
+              bounds.isOnAnyDisplay(of: scene) else {
             throw GroundingError.invalidBounds
         }
         return GroundingResult(target: .visualRegion(bounds: bounds), confidence: 0.7, strategy: name)

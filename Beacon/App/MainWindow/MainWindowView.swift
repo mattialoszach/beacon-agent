@@ -35,7 +35,7 @@ struct MainWindowView: View {
         NavigationSplitView {
             VStack(spacing: 0) {
                 HStack(spacing: 8) {
-                    BeaconLogo(appearance: .white)
+                    BeaconLogo()
                         .frame(width: 24, height: 20)
                     Text("Beacon")
                         .font(.headline)
@@ -47,23 +47,11 @@ struct MainWindowView: View {
 
                 Divider()
 
-                List(visibleSections) { section in
-                    Button {
-                        selection = section
-                    } label: {
-                        Label(section.rawValue, systemImage: section.icon)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 5)
-                            .contentShape(Rectangle())
-                            .background(
-                                selection == section ? BeaconPalette.blueViolet : .clear,
-                                in: RoundedRectangle(cornerRadius: 6)
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(selection == section ? .white : .primary)
-                    .listRowBackground(Color.clear)
+                // A selection-driven List is arrow-key navigable and announces the
+                // selected row to VoiceOver; rows built from plain buttons were neither.
+                List(visibleSections, selection: $selection) { section in
+                    Label(section.rawValue, systemImage: section.icon)
+                        .tag(section)
                 }
                 .listStyle(.sidebar)
             }
@@ -82,14 +70,6 @@ struct MainWindowView: View {
             case .permissions: PermissionsView()
             case .inspector: DeveloperInspectorView()
             }
-        }
-        .alert("Beacon", isPresented: Binding(
-            get: { controller.errorMessage != nil },
-            set: { if !$0 { controller.dismissError() } }
-        )) {
-            Button("OK") { controller.dismissError() }
-        } message: {
-            Text(controller.errorMessage ?? "Unknown error")
         }
         .onChange(of: appPreferences.showDeveloperInspector) { _, isVisible in
             if !isVisible, selection == .inspector {
@@ -139,6 +119,26 @@ private struct HomeView: View {
                         .frame(maxWidth: 650, alignment: .leading)
                 }
 
+                // Request failures are already shown beside the pointer. Other errors,
+                // such as an Inspector refresh failure or provider fallback, stay
+                // visible here without interrupting the user with a second modal alert.
+                if let errorMessage = controller.errorMessage, controller.state != .failed {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        Text(errorMessage)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Button("Dismiss", systemImage: "xmark") {
+                            controller.dismissError()
+                        }
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.plain)
+                        .help("Dismiss error")
+                    }
+                    .padding(12)
+                    .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+                }
+
                 Button { controller.showPrompt() } label: {
                     Label("Ask Beacon", systemImage: "arrow.right.circle.fill")
                         .frame(minWidth: 130)
@@ -159,6 +159,16 @@ private struct HomeView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             Text(response.message).font(.title3.weight(.semibold))
+                            if let confirmation = controller.confirmationMessage {
+                                Text("Check the result: \(confirmation)")
+                                Text("Beacon needs your confirmation before continuing.")
+                                    .font(.callout).foregroundStyle(.secondary)
+                                HStack {
+                                    Button("Confirm Result") { Task { await controller.confirmResult(succeeded: true) } }
+                                        .buttonStyle(.borderedProminent)
+                                    Button("That Didn’t Work") { Task { await controller.confirmResult(succeeded: false) } }
+                                }
+                            }
                             if let target = controller.selectedTarget {
                                 Text("\(controller.groundingStrategy) · \(Int((controller.groundingConfidence ?? 0) * 100))% confidence · \(String(describing: target))")
                                     .font(.caption.monospaced())

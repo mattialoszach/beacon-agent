@@ -12,64 +12,65 @@ struct StepVerifier: Sendable {
         after: ScreenScene,
         visualDifference: Double? = nil
     ) -> StepVerification {
-        let applicationChanged = before.activeApplication.processIdentifier
-            != after.activeApplication.processIdentifier
-            || before.activeApplication.bundleIdentifier != after.activeApplication.bundleIdentifier
+        guard SceneIdentity.sameDisplays(before, after) else {
+            return .init(succeeded: false, explanation: "The display configuration changed.")
+        }
+        let applicationChanged = !SceneIdentity.sameApplication(before, after)
         if applicationChanged,
-           expected?.type != .windowAppears
-            || expected?.applicationScope != .mayChange
-            || after.activeWindow == nil {
-            return StepVerification(
-                succeeded: false,
-                explanation: "The active application changed before Beacon could confirm the expected result."
-            )
+           expected?.type != .windowAppears || expected?.applicationScope != .mayChange
+            || expected?.destinationBundleIdentifier != after.activeApplication.bundleIdentifier {
+            return .init(succeeded: false, explanation: "The active application changed before the expected result was confirmed.")
         }
-        guard let expected else {
-            return .init(succeeded: true, explanation: "The interface changed.")
+        guard let expected, expected.canVerifyAutomatically else {
+            return .init(succeeded: false, explanation: "This result needs confirmation from the user.")
         }
-        let beforeLabels = Set(before.elements.map { $0.bestLabel.lowercased() })
-        let afterLabels = Set(after.elements.map { $0.bestLabel.lowercased() })
-        let beforeFocused = before.elements.first(where: \.focused)?.bestLabel
-        let afterFocused = after.elements.first(where: \.focused)?.bestLabel
-        let windowChanged = before.activeWindow?.title != after.activeWindow?.title
-        let hierarchyChanged = beforeLabels != afterLabels
-        let controlStateChanged = hasControlStateChange(from: before, to: after)
-
         let success: Bool
-        switch expected.type {
-        case .windowAppears:
-            success = applicationChanged || windowChanged || afterLabels.subtracting(beforeLabels).count >= 2
-        case .windowDisappears:
-            success = windowChanged || beforeLabels.subtracting(afterLabels).count >= 2
-        case .focusedElementChanges:
-            success = beforeFocused != afterFocused
-        case .elementAppears:
-            success = !afterLabels.subtracting(beforeLabels).isEmpty
-        case .visualChange:
-            success = windowChanged || hierarchyChanged || controlStateChanged
-                || (visualDifference ?? 0) >= FrameDifferenceDetector().meaningfulThreshold
+        if expected.type == .windowAppears {
+            success = appearedWindow(matches: expected, before: before, after: after, applicationChanged: applicationChanged)
+        } else {
+            guard SceneIdentity.sameWindow(before.activeWindow, after.activeWindow),
+                  let selector = expected.element else {
+                return .init(succeeded: false, explanation: "The expected control is not in the original window.")
+            }
+            let old = SceneIdentity.elements(in: before, windowID: before.activeWindow?.id)
+            let new = SceneIdentity.elements(in: after, windowID: after.activeWindow?.id)
+            let matching = new.filter { selector.matches($0) && $0.enabled }
+            // Ambiguous selectors must never choose an arbitrary matching control.
+            guard matching.count == 1, let target = matching.first else {
+                return .init(succeeded: false, explanation: "The expected control was absent or ambiguous.")
+            }
+            switch expected.type {
+            case .elementAppears:
+                success = !old.contains { selector.matches($0) }
+            case .focusedElementChanges:
+                success = target.focused && !old.contains { selector.matches($0) && $0.focused }
+            case .visualChange:
+                let previous = old.filter { $0.id == target.id && selector.matches($0, includingValue: false) }
+                success = previous.count == 1 && previous.first?.value != target.value
+            case .windowAppears, .windowDisappears:
+                success = false
+            }
         }
-        return StepVerification(
-            succeeded: success,
-            explanation: success
-                ? "Observed the expected interface change: \(expected.description)"
-                : "The interface changed, but not in the expected way: \(expected.description)"
-        )
+        return .init(succeeded: success, explanation: success
+                     ? "Confirmed: \(expected.description)"
+                     : "The expected result has not been confirmed: \(expected.description)")
     }
 
-    private func hasControlStateChange(from before: ScreenScene, to after: ScreenScene) -> Bool {
-        let beforeStates = Dictionary(uniqueKeysWithValues: before.elements.map { element in
-            (element.id, ControlState(value: element.value, enabled: element.enabled))
-        })
-        return after.elements.contains { element in
-            guard let previous = beforeStates[element.id] else { return false }
-            return previous != ControlState(value: element.value, enabled: element.enabled)
+    private func appearedWindow(
+        matches expected: ExpectedOutcome, before: ScreenScene, after: ScreenScene, applicationChanged: Bool
+    ) -> Bool {
+        let oldIDs = Set(SceneIdentity.visibleWindows(in: before).compactMap(\.id))
+        let candidates = SceneIdentity.visibleWindows(in: after).filter { window in
+            guard let id = window.id, !id.isEmpty,
+                  applicationChanged || !oldIDs.contains(id) else { return false }
+            guard id == after.activeWindow?.id || window.parentWindowID == before.activeWindow?.id else { return false }
+            if let title = expected.windowTitle,
+               ExpectedElement.normalized(window.title ?? "") != ExpectedElement.normalized(title) { return false }
+            if let selector = expected.element {
+                return after.elements.filter { $0.windowID == id && selector.matches($0) && $0.enabled }.count == 1
+            }
+            return expected.windowTitle?.isEmpty == false
         }
+        return candidates.count == 1
     }
-
-}
-
-private struct ControlState: Equatable {
-    let value: String?
-    let enabled: Bool
 }

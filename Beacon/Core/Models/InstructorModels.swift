@@ -27,7 +27,11 @@ struct SuggestedAction: Codable, Equatable, Sendable {
         if let id = targetElementId, !scene.elements.contains(where: { $0.id == id }) {
             throw GroundingError.elementNotFound(id)
         }
-        if let bounds = targetBounds, !bounds.isValid { throw GroundingError.invalidBounds }
+        if let bounds = targetBounds {
+            guard bounds.isValid, bounds.isOnAnyDisplay(of: scene) else {
+                throw GroundingError.invalidBounds
+            }
+        }
         if let targetMark {
             guard let mark = marks.first(where: { $0.id == targetMark }) else {
                 throw GroundingError.markNotFound(targetMark)
@@ -58,15 +62,64 @@ struct ExpectedOutcome: Codable, Equatable, Sendable {
     let type: ExpectedOutcomeType
     let description: String
     let applicationScope: ExpectedApplicationScope
+    let element: ExpectedElement?
+    let windowTitle: String?
+    let destinationBundleIdentifier: String?
 
     init(
         type: ExpectedOutcomeType,
         description: String,
-        applicationScope: ExpectedApplicationScope = .sameApplication
+        applicationScope: ExpectedApplicationScope = .sameApplication,
+        element: ExpectedElement? = nil,
+        windowTitle: String? = nil,
+        destinationBundleIdentifier: String? = nil
     ) {
         self.type = type
         self.description = description
         self.applicationScope = applicationScope
+        self.element = element
+        self.windowTitle = windowTitle
+        self.destinationBundleIdentifier = destinationBundleIdentifier
+    }
+
+    var canVerifyAutomatically: Bool {
+        if applicationScope == .mayChange,
+           destinationBundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false { return false }
+        switch type {
+        case .windowDisappears: return false // Save and Cancel can produce the same visible state.
+        case .windowAppears: return windowTitle.map { !ExpectedElement.normalized($0).isEmpty } == true || element?.hasIdentity == true
+        case .elementAppears, .focusedElementChanges: return element?.hasIdentity == true
+        case .visualChange: return element?.hasIdentity == true && element?.value != nil
+        }
+    }
+}
+
+struct ExpectedElement: Codable, Equatable, Sendable {
+    var id: String? = nil
+    var labels: [String] = []
+    var role: String? = nil
+    var value: String? = nil
+
+    var hasIdentity: Bool {
+        id?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            || labels.contains { !Self.normalized($0).isEmpty }
+    }
+
+    func matches(_ element: UIElementDescriptor, includingValue: Bool = true) -> Bool {
+        guard hasIdentity else { return false }
+        if let id, id != element.id { return false }
+        if let role, role != element.role { return false }
+        if !labels.isEmpty, !labels.contains(where: { label in
+            [element.label, element.title].compactMap { $0 }.contains { Self.normalized($0) == Self.normalized(label) }
+        }) { return false }
+        if includingValue, let value, Self.normalized(element.value ?? "") != Self.normalized(value) { return false }
+        return true
+    }
+
+    static func normalized(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            .replacingOccurrences(of: "…", with: "")
+            .trimmingCharacters(in: CharacterSet(charactersIn: ":."))
     }
 }
 

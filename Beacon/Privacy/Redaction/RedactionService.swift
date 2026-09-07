@@ -10,25 +10,33 @@ enum RedactionCategory: String, Codable, CaseIterable, Sendable {
     case detectedSensitiveText
 }
 
-struct RedactionRegion: Codable, Equatable, Sendable {
+struct RedactionRegion: Codable, Equatable, Hashable, Sendable {
     let bounds: NormalizedRect
     let category: RedactionCategory
 }
 
 struct RedactionService {
     func automaticRegions(in scene: ScreenScene) -> [RedactionRegion] {
-        scene.elements.compactMap { element in
-            guard element.subrole == "AXSecureTextField",
-                  let bounds = element.bounds else { return nil }
-            return RedactionRegion(bounds: bounds, category: .passwordField)
+        // `secureFieldBounds` also carries fields from the application's other visible
+        // windows, which the focused-window filter removes from `elements` even though
+        // the capture covers the whole display.
+        let elementBounds = scene.elements.compactMap { element in
+            element.subrole == "AXSecureTextField" ? element.bounds : nil
         }
+        var seen = Set<NormalizedRect>()
+        return (elementBounds + scene.secureFieldBounds)
+            .filter { seen.insert($0).inserted }
+            .map { RedactionRegion(bounds: $0, category: .passwordField) }
     }
 
     func redact(
         snapshot: ScreenSnapshot,
         regions: [RedactionRegion]
     ) throws -> ScreenSnapshot {
-        let applicable = regions.filter { intersects($0.bounds, snapshot.displayBounds) }
+        var seen = Set<RedactionRegion>()
+        let applicable = regions
+            .filter { intersects($0.bounds, snapshot.displayBounds) }
+            .filter { seen.insert($0).inserted }
         guard !applicable.isEmpty else { return snapshot }
         guard let source = CGImageSourceCreateWithData(snapshot.pngData as CFData, nil),
               let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
@@ -48,6 +56,7 @@ struct RedactionService {
 
         context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
         context.setFillColor(CGColor(gray: 0.08, alpha: 1))
+        context.setShouldAntialias(false)
         var drawnRegionCount = 0
         for region in applicable {
             guard let drawingRect = CoordinateSpaceMapper.bitmapDrawingRect(
@@ -55,7 +64,7 @@ struct RedactionService {
                 pixelSize: CGSize(width: image.width, height: image.height),
                 displayBounds: snapshot.displayBounds
             ) else { continue }
-            context.fill(drawingRect)
+            context.fill(drawingRect.integral)
             drawnRegionCount += 1
         }
 

@@ -141,7 +141,8 @@ struct RequestModeClassifier {
     }
 
     private static let guidePhrases = [
-        "how do i", "how can i", "where is", "where can i", "show me", "guide me",
+        "how do i", "how can i", "how to", "where is", "where's", "where are",
+        "where do i", "where can i", "where can i find", "show me", "guide me",
         "help me", "find the", "take me to", "steps to", "can you help me"
     ]
 

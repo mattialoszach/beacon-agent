@@ -35,6 +35,33 @@ struct NormalizedRect: Codable, Equatable, Hashable, Sendable {
         )
     }
 
+    func intersects(_ other: NormalizedRect) -> Bool {
+        x < other.x + other.width && x + width > other.x
+            && y < other.y + other.height && y + height > other.y
+    }
+
+    /// The virtual desktop is the union of every display, so a non-rectangular layout
+    /// leaves gaps that belong to no screen. A rectangle there would be normalized and
+    /// grounded but could never be rendered.
+    func isOnAnyDisplay(of scene: ScreenScene) -> Bool {
+        guard !scene.displays.isEmpty else { return true }
+        return scene.displays.contains { display in
+            display.bounds.contains(self)
+        }
+    }
+
+    func contains(_ other: NormalizedRect) -> Bool {
+        let tolerance = 0.000_001
+        return other.x >= x - tolerance
+            && other.y >= y - tolerance
+            && other.x + other.width <= x + width + tolerance
+            && other.y + other.height <= y + height + tolerance
+    }
+
+    func contains(_ point: NormalizedPoint) -> Bool {
+        point.x >= x && point.x <= x + width && point.y >= y && point.y <= y + height
+    }
+
     static func clamped(x: Double, y: Double, width: Double, height: Double) -> NormalizedRect {
         let safeX = min(max(x.isFinite ? x : 0, 0), 1)
         let safeY = min(max(y.isFinite ? y : 0, 0), 1)
@@ -67,6 +94,18 @@ struct CoordinateSpaceMapper: Equatable, Sendable {
         )
     }
 
+    /// Converts a global AppKit rectangle into a top-left SwiftUI rectangle inside
+    /// a particular window or screen frame. Overlay rendering uses this so the single
+    /// Y-axis inversion stays inside the mapper.
+    static func localSwiftUIRect(fromGlobalAppKit rect: CGRect, in frame: CGRect) -> CGRect {
+        CGRect(
+            x: rect.minX - frame.minX,
+            y: frame.maxY - rect.maxY,
+            width: rect.width,
+            height: rect.height
+        )
+    }
+
     func normalizeAXRect(_ rect: CGRect) -> NormalizedRect? {
         guard virtualDesktopBounds.width > 0, virtualDesktopBounds.height > 0,
               rect.width >= 0, rect.height >= 0 else { return nil }
@@ -78,6 +117,30 @@ struct CoordinateSpaceMapper: Equatable, Sendable {
             height: rect.height / virtualDesktopBounds.height
         )
         return result.isValid ? result : nil
+    }
+
+    /// Normalizes a global AX/Quartz rectangle after clipping it to the virtual desktop.
+    ///
+    /// Platform extraction uses this variant so a window or control that extends past a
+    /// screen edge keeps its visible geometry instead of vanishing from the scene. Model
+    /// supplied rectangles keep the strict `normalizeAXRect` so an invented rectangle is
+    /// still rejected rather than silently clamped.
+    func normalizeAXRect(clippingToDesktop rect: CGRect) -> NormalizedRect? {
+        guard virtualDesktopBounds.width > 0, virtualDesktopBounds.height > 0,
+              [rect.origin.x, rect.origin.y, rect.width, rect.height].allSatisfy(\.isFinite),
+              rect.width >= 0, rect.height >= 0 else { return nil }
+
+        let minX = max(rect.minX, virtualDesktopBounds.minX)
+        let minY = max(rect.minY, virtualDesktopBounds.minY)
+        let maxX = min(rect.maxX, virtualDesktopBounds.maxX)
+        let maxY = min(rect.maxY, virtualDesktopBounds.maxY)
+        guard maxX >= minX, maxY >= minY else { return nil }
+        // A rectangle that had area but lost all of it lies entirely off the desktop.
+        guard rect.width == 0 || maxX > minX, rect.height == 0 || maxY > minY else { return nil }
+
+        return normalizeAXRect(
+            CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+        )
     }
 
     func axRect(from rect: NormalizedRect) -> CGRect? {

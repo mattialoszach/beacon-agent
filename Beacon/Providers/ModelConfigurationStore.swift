@@ -41,14 +41,22 @@ final class ModelConfigurationStore: ObservableObject {
     @Published var openAIModel: OpenAIModelChoice {
         didSet { defaults.set(openAIModel.rawValue, forKey: Keys.openAIModel) }
     }
+    /// The editable draft shown in the API key field.
     @Published var apiKey: String = ""
+    /// The credential actually persisted in Keychain. Requests use this so a half-typed
+    /// or cleared draft never becomes the key that is sent.
+    @Published private(set) var storedAPIKey = ""
     @Published private(set) var hasStoredAPIKey = false
     @Published private(set) var isLoadingAPIKey = false
+    @Published private(set) var isMutatingAPIKey = false
 
     private let defaults: UserDefaults
     private let apiKeyStorage: any APIKeyStorage
     private var hasLoadedAPIKey = false
     private var apiKeyLoadTask: Task<String?, Never>?
+    /// Serialises credential writes so a save and a remove cannot interleave and leave
+    /// Keychain and the published state disagreeing.
+    private var credentialOperation: Task<Void, Never>?
 
     init(
         defaults: UserDefaults = .standard,
@@ -91,6 +99,7 @@ final class ModelConfigurationStore: ObservableObject {
         if apiKey.isEmpty {
             apiKey = storedKey
         }
+        storedAPIKey = storedKey
         hasStoredAPIKey = !storedKey.isEmpty
         hasLoadedAPIKey = true
         isLoadingAPIKey = false
@@ -99,23 +108,55 @@ final class ModelConfigurationStore: ObservableObject {
 
     func saveAPIKey() async throws {
         await loadAPIKeyIfNeeded()
-        let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        let storage = apiKeyStorage
-        try await Task.detached(priority: .userInitiated) {
-            try storage.write(trimmedAPIKey)
-        }.value
-        apiKey = trimmedAPIKey
-        hasStoredAPIKey = !trimmedAPIKey.isEmpty
+        // Snapshot the submitted draft before waiting behind an earlier Keychain mutation.
+        // The previous operation may finish by updating the visible field, but it must not
+        // change what this already-requested save writes.
+        let submittedDraft = apiKey
+        let trimmedAPIKey = submittedDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        try await performCredentialOperation { [apiKeyStorage] in
+            try await Task.detached(priority: .userInitiated) {
+                try apiKeyStorage.write(trimmedAPIKey)
+            }.value
+            if self.apiKey == submittedDraft {
+                self.apiKey = trimmedAPIKey
+            }
+            self.storedAPIKey = trimmedAPIKey
+            self.hasStoredAPIKey = !trimmedAPIKey.isEmpty
+        }
     }
 
     func removeAPIKey() async throws {
         await loadAPIKeyIfNeeded()
-        let storage = apiKeyStorage
-        try await Task.detached(priority: .userInitiated) {
-            try storage.delete()
-        }.value
-        apiKey = ""
-        hasStoredAPIKey = false
+        let draftWhenRequested = apiKey
+        try await performCredentialOperation { [apiKeyStorage] in
+            try await Task.detached(priority: .userInitiated) {
+                try apiKeyStorage.delete()
+            }.value
+            if self.apiKey == draftWhenRequested {
+                self.apiKey = ""
+            }
+            self.storedAPIKey = ""
+            self.hasStoredAPIKey = false
+        }
+    }
+
+    /// Runs credential writes one at a time, in the order they were requested.
+    private func performCredentialOperation(
+        _ body: @escaping @MainActor () async throws -> Void
+    ) async throws {
+        let previous = credentialOperation
+        var thrown: Error?
+        let operation = Task { @MainActor in
+            await previous?.value
+            await self.loadAPIKeyIfNeeded()
+            self.isMutatingAPIKey = true
+            defer { self.isMutatingAPIKey = false }
+            do { try await body() } catch { thrown = error }
+        }
+        credentialOperation = operation
+        await operation.value
+        if credentialOperation == operation { credentialOperation = nil }
+        if let thrown { throw thrown }
     }
 
     private enum Keys {
@@ -131,11 +172,33 @@ protocol APIKeyStorage: Sendable {
     func delete() throws
 }
 
+enum KeychainError: LocalizedError, Equatable {
+    case status(OSStatus)
+
+    var errorDescription: String? {
+        guard case let .status(status) = self else { return nil }
+        let reason = SecCopyErrorMessageString(status, nil) as String?
+            ?? "Keychain error \(status)"
+        switch status {
+        case errSecAuthFailed, errSecInteractionNotAllowed, errSecUserCanceled:
+            return "\(reason) Allow Beacon when macOS asks for Keychain access, or remove the “Beacon” item in Keychain Access and save the key again."
+        default:
+            return reason
+        }
+    }
+}
+
 struct KeychainAPIKeyStorage: APIKeyStorage {
     let service: String
     let account: String
 
     func read() -> String? {
+        try? readStoredValue()
+    }
+
+    /// Distinguishes "no key stored" (nil) from a Keychain failure (throws), so a denied
+    /// access prompt is not reported to the user as an absent key.
+    func readStoredValue() throws -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -144,27 +207,37 @@ struct KeychainAPIKeyStorage: APIKeyStorage {
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
         var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data else { return nil }
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else { throw KeychainError.status(status) }
+        guard let data = item as? Data else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
     func write(_ value: String) throws {
-        let base = keychainQuery
-        try delete()
-        guard !value.isEmpty else { return }
-        var item = base
-        item[kSecValueData as String] = Data(value.utf8)
+        guard !value.isEmpty else { return try delete() }
+        let data = Data(value.utf8)
+        // Update in place so a failure cannot leave the item deleted and unreplaced.
+        let updateStatus = SecItemUpdate(
+            keychainQuery as CFDictionary,
+            [kSecValueData as String: data] as CFDictionary
+        )
+        if updateStatus == errSecSuccess { return }
+        guard updateStatus == errSecItemNotFound else {
+            throw KeychainError.status(updateStatus)
+        }
+        var item = keychainQuery
+        item[kSecValueData as String] = data
         let status = SecItemAdd(item as CFDictionary, nil)
         guard status == errSecSuccess else {
-            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
+            throw KeychainError.status(status)
         }
     }
 
     func delete() throws {
         let status = SecItemDelete(keychainQuery as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
+            throw KeychainError.status(status)
         }
     }
 

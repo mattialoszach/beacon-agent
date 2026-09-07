@@ -32,6 +32,7 @@ struct ScreenCaptureService {
         let excludedApplications = content.applications.filter { application in
             excludingBundleIdentifiers.contains(application.bundleIdentifier)
                 || application.bundleIdentifier == ownBundleID
+                || Self.alwaysExcludedBundleIdentifiers.contains(application.bundleIdentifier)
         }
         let filter = SCContentFilter(
             display: display,
@@ -39,9 +40,12 @@ struct ScreenCaptureService {
             exceptingWindows: []
         )
         let configuration = SCStreamConfiguration()
+        // SCDisplay reports points; SCStreamConfiguration expects pixels. Passing points
+        // through would capture every Retina display at 1x and blur small text for OCR.
+        let pixelSize = Self.pixelSize(of: display)
         let dimensions = ScreenCaptureDimensions.fitting(
-            pixelWidth: display.width,
-            pixelHeight: display.height,
+            pixelWidth: pixelSize.width,
+            pixelHeight: pixelSize.height,
             maximumDimension: maximumCaptureDimension
         )
         configuration.width = dimensions.width
@@ -68,6 +72,23 @@ struct ScreenCaptureService {
                 excludingBundleIdentifiers.contains($0.bundleIdentifier)
             }.count
         )
+    }
+
+    /// Notification banners are drawn by Notification Center, not by the application that
+    /// posted them, so an excluded application's alert would otherwise reach the capture.
+    static let alwaysExcludedBundleIdentifiers: Set<String> = [
+        "com.apple.notificationcenterui"
+    ]
+
+    /// Backing pixel size of a display. `CGDisplayPixelsWide` reports the logical mode
+    /// size, so only the display mode exposes the true Retina pixel dimensions.
+    static func pixelSize(of display: SCDisplay) -> (width: Int, height: Int) {
+        guard let mode = CGDisplayCopyDisplayMode(display.displayID) else {
+            return (display.width, display.height)
+        }
+        let width = mode.pixelWidth > 0 ? mode.pixelWidth : display.width
+        let height = mode.pixelHeight > 0 ? mode.pixelHeight : display.height
+        return (width, height)
     }
 
     private func chooseDisplay(from displays: [SCDisplay], point: CGPoint?) -> SCDisplay? {

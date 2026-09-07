@@ -2,6 +2,20 @@ import XCTest
 @testable import Beacon
 
 final class FloatingPromptLayoutTests: XCTestCase {
+    @MainActor
+    func testEachNewStatusStartsVisibleEvenWhenThePointerIsAlreadyOverIt() {
+        let status = FloatingPromptPresentation(cursorMovementBaseline: 5, onSubmit: { _ in }, onCancel: {})
+        XCTAssertFalse(status.allowsCursorFade(after: 6), "The interactive question never fades")
+        for mode in [FloatingPromptPresentation.Mode.thinking, .waiting, .answer] {
+            status.showStatus(mode: mode, message: "New message", cursorMovementBaseline: 10)
+            XCTAssertFalse(status.allowsCursorFade(after: 10))
+            XCTAssertTrue(status.allowsCursorFade(after: 11))
+        }
+        status.updateThinking(message: "Updated message", cursorMovementBaseline: 12)
+        XCTAssertFalse(status.allowsCursorFade(after: 12))
+        XCTAssertTrue(status.allowsCursorFade(after: 13))
+    }
+
     func testPromptKeepsOriginalPaddingWithACompactNaturalHeight() {
         XCTAssertEqual(FloatingPromptLayout.outerPadding, 16)
         XCTAssertEqual(FloatingPromptLayout.inputPadding, 12)

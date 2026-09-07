@@ -107,7 +107,7 @@ struct VisionSceneAnalyzer: Sendable {
                     paddingY: min(0.006, 6 / Double(max(1, snapshot.pixelHeight)))
                 ) else { return nil }
                 return descriptor(
-                    text: String(text.prefix(300)),
+                    text: SensitiveTextDetector().kind(of: text) != nil ? text : String(text.prefix(300)),
                     bounds: bounds,
                     confidence: Double(candidate.confidence),
                     kind: .text

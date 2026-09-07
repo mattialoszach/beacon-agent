@@ -59,3 +59,32 @@ private struct FixedSemanticScorer: RequestModeSemanticScoring {
         RequestModeSemanticScores(ask: ask, guide: guide)
     }
 }
+
+final class LocationPhrasingClassifierTests: XCTestCase {
+    private let classifier = RequestModeClassifier(semanticScorer: NeutralScorer())
+
+    /// "Where is X" and "Where's X" are the same request and must route the same way.
+    func testContractedAndPluralLocationQuestionsAskForGuidance() {
+        for question in [
+            "Where is the sidebar toggle?",
+            "Where's the sidebar toggle?",
+            "Where are my downloads?",
+            "Where do i change the theme?"
+        ] {
+            XCTAssertEqual(classifier.classify(question), .guide, "\(question) should guide")
+        }
+    }
+
+    func testExplanationQuestionsStillAnswer() {
+        for question in ["What is this warning?", "Why is this disabled?", "Explain this dialog"] {
+            XCTAssertEqual(classifier.classify(question), .ask, "\(question) should answer")
+        }
+    }
+}
+
+/// Keeps the classifier deterministic and independent of the on-device embedding model.
+private struct NeutralScorer: RequestModeSemanticScoring {
+    func scores(for request: String) -> RequestModeSemanticScores? {
+        RequestModeSemanticScores(ask: 0.5, guide: 0.5)
+    }
+}

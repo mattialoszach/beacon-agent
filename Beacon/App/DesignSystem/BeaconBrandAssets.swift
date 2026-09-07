@@ -22,9 +22,30 @@ enum BeaconBrandAssets {
             return image
         }
 
-        guard let url = Bundle.module.url(forResource: name, withExtension: "png") else { return nil }
+        // Deliberately avoids `Bundle.module`: its generated accessor calls `fatalError`
+        // when the resource bundle is absent, which would turn a missing image into a
+        // crash during launch. A missing asset falls back to an SF Symbol instead.
+        guard let url = resourceBundle?.url(forResource: name, withExtension: "png") else {
+            return nil
+        }
         return NSImage(contentsOf: url)
     }
+
+    private static let resourceBundle: Bundle? = {
+        let bundleName = "Beacon_Beacon.bundle"
+        var directories = [Bundle.main.bundleURL, Bundle.main.bundleURL.appendingPathComponent("Contents/Resources")]
+        if let resourceURL = Bundle.main.resourceURL { directories.append(resourceURL) }
+        directories += Bundle.allBundles.map { $0.bundleURL.deletingLastPathComponent() }
+
+        for directory in directories {
+            let candidate = directory.appendingPathComponent(bundleName)
+            if FileManager.default.fileExists(atPath: candidate.path),
+               let bundle = Bundle(url: candidate) {
+                return bundle
+            }
+        }
+        return nil
+    }()
 }
 
 struct BeaconLogo: View {

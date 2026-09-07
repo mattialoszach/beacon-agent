@@ -9,12 +9,16 @@ struct ApplicationDescriptor: Codable, Equatable, Sendable {
 struct WindowDescriptor: Codable, Equatable, Sendable {
     let title: String?
     let bounds: NormalizedRect?
+    var id: String? = nil
+    var role: String? = nil
+    var parentWindowID: String? = nil
 }
 
 struct DisplayDescriptor: Codable, Equatable, Identifiable, Sendable {
     let id: UInt32
     let bounds: NormalizedRect
     let scaleFactor: Double
+    var logicalSize: CGSize? = nil
 }
 
 struct ScreenSnapshot: Codable, Equatable, Sendable {
@@ -37,6 +41,8 @@ struct UIElementDescriptor: Identifiable, Codable, Equatable, Hashable, Sendable
     let enabled: Bool
     let focused: Bool
     let bounds: NormalizedRect?
+
+    var windowID: String? = nil
 
     var bestLabel: String {
         [label, title, value]
@@ -98,6 +104,15 @@ struct ScreenScene: Codable, Equatable, Sendable {
     let elements: [UIElementDescriptor]
     var visualElements: [VisualElementDescriptor] = []
     let displays: [DisplayDescriptor]
+    var windows: [WindowDescriptor] = []
+    /// Secure-field rectangles from every window of the application, including windows
+    /// that the focused-window filter removes from `elements`. Redaction masks all of
+    /// them because the capture covers the whole display.
+    var secureFieldBounds: [NormalizedRect] = []
+    /// True when the Accessibility traversal stopped at its depth, node, output, or time
+    /// budget. A truncated capture is an incomplete view of the interface, so semantic
+    /// comparisons must not read a smaller element set as a changed interface.
+    var isTruncated = false
 }
 
 extension ScreenScene {
@@ -109,7 +124,10 @@ extension ScreenScene {
             screenshot: snapshot,
             elements: elements,
             visualElements: visualElements,
-            displays: displays
+            displays: displays,
+            windows: windows,
+            secureFieldBounds: secureFieldBounds,
+            isTruncated: isTruncated
         )
     }
 
@@ -121,7 +139,10 @@ extension ScreenScene {
             screenshot: screenshot,
             elements: elements,
             visualElements: visualElements,
-            displays: displays
+            displays: displays,
+            windows: windows,
+            secureFieldBounds: secureFieldBounds,
+            isTruncated: isTruncated
         )
     }
 }

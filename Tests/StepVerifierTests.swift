@@ -21,7 +21,8 @@ final class StepVerifierTests: XCTestCase {
     func testWindowAppearanceAcceptsNewDialogControls() {
         let before = scene(title: "Document", labels: ["File", "Edit"])
         let after = scene(title: "Export", labels: ["Cancel", "Export", "Format"])
-        let expected = ExpectedOutcome(type: .windowAppears, description: "Export dialog appears")
+        let expected = ExpectedOutcome(type: .windowAppears, description: "Export dialog appears",
+            element: ExpectedElement(labels: ["Format"], role: "AXButton"))
 
         XCTAssertTrue(StepVerifier().verify(expected: expected, before: before, after: after).succeeded)
     }
@@ -40,7 +41,7 @@ final class StepVerifierTests: XCTestCase {
         let expected = ExpectedOutcome(
             type: .windowAppears,
             description: "The destination window appears",
-            applicationScope: .mayChange
+            applicationScope: .mayChange, windowTitle: "Destination", destinationBundleIdentifier: "test.destination"
         )
 
         XCTAssertTrue(StepVerifier().verify(expected: expected, before: before, after: after).succeeded)
@@ -81,6 +82,18 @@ final class StepVerifierTests: XCTestCase {
         XCTAssertFalse(StepVerifier().verify(expected: expected, before: before, after: after).succeeded)
     }
 
+    func testClosingAWindowDoesNotVerifyWindowAppearance() {
+        let before = scene(title: "Document", labels: ["Save"])
+        let after = ScreenScene(timestamp: Date(), activeApplication: before.activeApplication,
+                                activeWindow: nil, screenshot: nil, elements: [], displays: [])
+        XCTAssertFalse(StepVerifier().verify(
+            expected: .init(type: .windowAppears, description: "Export opens"), before: before, after: after
+        ).succeeded)
+        XCTAssertFalse(StepVerifier().verify(
+            expected: .init(type: .windowDisappears, description: "Document closes"), before: before, after: after
+        ).succeeded)
+    }
+
     func testControlValueChangeSatisfiesVisualChange() {
         let before = scene(
             title: "Document",
@@ -92,9 +105,12 @@ final class StepVerifierTests: XCTestCase {
             labels: ["Permission"],
             values: ["Permission": "1"]
         )
-        let expected = ExpectedOutcome(type: .visualChange, description: "Permission is enabled")
+        let expected = ExpectedOutcome(type: .visualChange, description: "Permission is enabled",
+            element: ExpectedElement(labels: ["Permission"], role: "AXButton", value: "1"))
 
         XCTAssertTrue(StepVerifier().verify(expected: expected, before: before, after: after).succeeded)
+        XCTAssertNotEqual(SceneFingerprint(scene: before), SceneFingerprint(scene: after),
+                          "The observer must detect the change before invoking the verifier.")
     }
 
     private func scene(
@@ -107,13 +123,13 @@ final class StepVerifierTests: XCTestCase {
         ScreenScene(
             timestamp: Date(),
             activeApplication: .init(name: "Fixture", bundleIdentifier: bundleIdentifier, processIdentifier: 1),
-            activeWindow: .init(title: title, bounds: nil),
+            activeWindow: .init(title: title, bounds: nil, id: "window_\(title)"),
             screenshot: nil,
             elements: labels.enumerated().map { index, label in
                 UIElementDescriptor(
                     id: "e_\(index)", role: "AXButton", subrole: nil, label: label,
                     title: nil, value: values[label], enabled: true, focused: label == focusedLabel,
-                    bounds: .init(x: 0.1, y: 0.1 + Double(index) * 0.1, width: 0.1, height: 0.05)
+                    bounds: .init(x: 0.1, y: 0.1 + Double(index) * 0.1, width: 0.1, height: 0.05), windowID: "window_\(title)"
                 )
             },
             displays: []

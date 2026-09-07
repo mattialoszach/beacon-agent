@@ -5,84 +5,192 @@ struct OverlayCanvasView: View {
     let presentation: OverlayController.Presentation
     let screenFrame: CGRect
     let mapper: CoordinateSpaceMapper
-    @ObservedObject var cursorPositionMonitor: CursorPositionMonitor
+    /// Held without `@ObservedObject` on purpose: the cursor publishes at pointer rate and
+    /// only the fade depends on it. Observing it here would re-evaluate the full-screen
+    /// Canvas on every mouse move.
+    let cursorPositionMonitor: CursorPositionMonitor
+    var cursorMovementBaseline: UInt64 = 0
 
     var body: some View {
         GeometryReader { proxy in
-            let fadesForCursor = shouldFadeForCursor(in: proxy.size)
-
-            ZStack(alignment: .topLeading) {
-                if presentation.style == .spotlight, let targetRect {
-                    Canvas { context, size in
-                        var path = Path(CGRect(origin: .zero, size: size))
-                        path.addRoundedRect(in: targetRect.insetBy(dx: -8, dy: -8), cornerSize: CGSize(width: 10, height: 10))
-                        context.fill(path, with: .color(.black.opacity(0.52)), style: FillStyle(eoFill: true))
-                    }
-                }
-
-                if let targetRect {
-                    TargetHighlight(style: presentation.style)
-                        .frame(width: max(12, targetRect.width), height: max(12, targetRect.height))
-                        .position(x: targetRect.midX, y: targetRect.midY)
-
-                    InstructionCallout(text: presentation.instruction, target: targetRect, availableSize: proxy.size)
-
-                    if presentation.style == .arrow {
-                        GuidanceArrow(target: targetRect, availableSize: proxy.size)
-                    }
-                }
-
-                ForEach(presentation.debugElements) { element in
-                    if let rect = localRect(for: element.bounds), rect.intersects(CGRect(origin: .zero, size: proxy.size)) {
-                        DebugElementView(element: element)
-                            .frame(width: max(18, rect.width), height: max(18, rect.height))
-                            .position(x: rect.midX, y: rect.midY)
-                    }
-                }
+            CursorProximityFade(
+                cursorPositionMonitor: cursorPositionMonitor,
+                movementBaseline: cursorMovementBaseline,
+                screenFrame: screenFrame,
+                fadeRegions: fadeRegions(in: proxy.size)
+            ) {
+                OverlayContentView(
+                    presentation: presentation,
+                    screenFrame: screenFrame,
+                    mapper: mapper,
+                    availableSize: proxy.size
+                )
+                .equatable()
             }
-            .opacity(fadesForCursor ? 0.16 : 1)
-            .animation(.easeOut(duration: 0.12), value: fadesForCursor)
         }
         .ignoresSafeArea()
     }
 
-    private var targetRect: CGRect? {
-        localRect(for: presentation.target?.bounds)
-    }
-
-    private func localRect(for bounds: NormalizedRect?) -> CGRect? {
-        guard let bounds, let global = mapper.appKitRect(from: bounds) else { return nil }
-        return CGRect(
-            x: global.minX - screenFrame.minX,
-            y: screenFrame.maxY - global.maxY,
-            width: global.width,
-            height: global.height
+    var targetRect: CGRect? {
+        OverlayGeometry.localRect(
+            for: presentation.target?.bounds,
+            screenFrame: screenFrame,
+            mapper: mapper
         )
     }
 
-    private func shouldFadeForCursor(in availableSize: CGSize) -> Bool {
-        guard let targetRect else { return false }
+    /// Regions whose contents the pointer may cover, in screen-local SwiftUI coordinates.
+    func fadeRegions(in availableSize: CGSize) -> [CGRect] {
+        guard let targetRect else { return [] }
+        var regions = [targetRect.insetBy(dx: -18, dy: -18)]
+        regions.append(
+            InstructionCalloutGeometry.layout(
+                text: presentation.instruction,
+                target: targetRect,
+                availableSize: availableSize
+            ).frame.insetBy(dx: -8, dy: -8)
+        )
+        if presentation.style == .arrow,
+           let arrow = GuidanceArrowGeometry.layout(target: targetRect, availableSize: availableSize) {
+            regions.append(arrow.hoverBounds)
+        }
+        return regions
+    }
+
+    func shouldFadeForCursor(in availableSize: CGSize) -> Bool {
+        OverlayGeometry.fades(
+            monitor: cursorPositionMonitor,
+            movementBaseline: cursorMovementBaseline,
+            screenFrame: screenFrame,
+            fadeRegions: fadeRegions(in: availableSize)
+        )
+    }
+}
+
+enum OverlayGeometry {
+    static func localRect(
+        for bounds: NormalizedRect?,
+        screenFrame: CGRect,
+        mapper: CoordinateSpaceMapper
+    ) -> CGRect? {
+        guard let bounds, let global = mapper.appKitRect(from: bounds) else { return nil }
+        let local = CoordinateSpaceMapper.localSwiftUIRect(fromGlobalAppKit: global, in: screenFrame)
+        guard local.intersects(CGRect(origin: .zero, size: screenFrame.size)) else { return nil }
+        return local
+    }
+
+    /// The single definition of the proximity-fade rule, shared by the live view and the
+    /// value `OverlayCanvasView` exposes for tests, so the two cannot drift apart.
+    @MainActor
+    static func fades(
+        monitor: CursorPositionMonitor,
+        movementBaseline: UInt64,
+        screenFrame: CGRect,
+        fadeRegions: [CGRect]
+    ) -> Bool {
+        guard monitor.movementCount > movementBaseline else { return false }
         let cursor = CoordinateSpaceMapper.localSwiftUIPoint(
-            fromGlobalAppKit: cursorPositionMonitor.location,
+            fromGlobalAppKit: monitor.location,
             in: screenFrame
         )
+        return fadeRegions.contains { $0.contains(cursor) }
+    }
+}
 
-        if targetRect.insetBy(dx: -18, dy: -18).contains(cursor) {
-            return true
-        }
+/// Applies the proximity fade without rebuilding the guidance content. Only this view
+/// observes the cursor, so pointer movement never re-rasterizes the overlay canvas.
+private struct CursorProximityFade<Content: View>: View {
+    @ObservedObject var cursorPositionMonitor: CursorPositionMonitor
+    let movementBaseline: UInt64
+    let screenFrame: CGRect
+    let fadeRegions: [CGRect]
+    let content: Content
 
-        let callout = InstructionCalloutGeometry.layout(
-            text: presentation.instruction,
-            target: targetRect,
-            availableSize: availableSize
+    init(
+        cursorPositionMonitor: CursorPositionMonitor,
+        movementBaseline: UInt64,
+        screenFrame: CGRect,
+        fadeRegions: [CGRect],
+        @ViewBuilder content: () -> Content
+    ) {
+        self.cursorPositionMonitor = cursorPositionMonitor
+        self.movementBaseline = movementBaseline
+        self.screenFrame = screenFrame
+        self.fadeRegions = fadeRegions
+        self.content = content()
+    }
+
+    private var fades: Bool {
+        OverlayGeometry.fades(
+            monitor: cursorPositionMonitor,
+            movementBaseline: movementBaseline,
+            screenFrame: screenFrame,
+            fadeRegions: fadeRegions
         )
-        if callout.frame.insetBy(dx: -8, dy: -8).contains(cursor) {
-            return true
-        }
+    }
 
-        return presentation.style == .arrow
-            && GuidanceArrowGeometry.layout(target: targetRect, availableSize: availableSize)?
-                .hoverBounds.contains(cursor) == true
+    var body: some View {
+        content
+            .opacity(fades ? 0.16 : 1)
+            .animation(.easeOut(duration: 0.12), value: fades)
+    }
+}
+
+private struct OverlayContentView: View, Equatable {
+    let presentation: OverlayController.Presentation
+    let screenFrame: CGRect
+    let mapper: CoordinateSpaceMapper
+    let availableSize: CGSize
+
+    private var targetRect: CGRect? {
+        OverlayGeometry.localRect(
+            for: presentation.target?.bounds,
+            screenFrame: screenFrame,
+            mapper: mapper
+        )
+    }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            if presentation.style == .spotlight, let targetRect {
+                Canvas { context, size in
+                    var path = Path(CGRect(origin: .zero, size: size))
+                    path.addRoundedRect(
+                        in: targetRect.insetBy(dx: -8, dy: -8),
+                        cornerSize: CGSize(width: 10, height: 10)
+                    )
+                    context.fill(path, with: .color(.black.opacity(0.52)), style: FillStyle(eoFill: true))
+                }
+            }
+
+            if let targetRect {
+                TargetHighlight(style: presentation.style)
+                    .frame(width: max(12, targetRect.width), height: max(12, targetRect.height))
+                    .position(x: targetRect.midX, y: targetRect.midY)
+
+                InstructionCallout(
+                    text: presentation.instruction,
+                    target: targetRect,
+                    availableSize: availableSize
+                )
+
+                if presentation.style == .arrow {
+                    GuidanceArrow(target: targetRect, availableSize: availableSize)
+                }
+            }
+
+            ForEach(presentation.debugElements) { element in
+                if let rect = OverlayGeometry.localRect(
+                    for: element.bounds,
+                    screenFrame: screenFrame,
+                    mapper: mapper
+                ) {
+                    DebugElementView(element: element)
+                        .frame(width: max(18, rect.width), height: max(18, rect.height))
+                        .position(x: rect.midX, y: rect.midY)
+                }
+            }
+        }
     }
 }
 

@@ -44,17 +44,18 @@ struct PrivacyView: View {
             }
 
             Section("Never capture these applications") {
-                ForEach(runningApps, id: \.processIdentifier) { app in
-                    let bundleID = app.bundleIdentifier ?? ""
+                ForEach(listedApplications, id: \.bundleID) { entry in
                     Toggle(isOn: Binding(
-                        get: { controller.privacySettings.isExcluded(bundleIdentifier: bundleID) },
-                        set: { controller.privacySettings.setExcluded($0, bundleIdentifier: bundleID) }
+                        get: { controller.privacySettings.isExcluded(bundleIdentifier: entry.bundleID) },
+                        set: { controller.privacySettings.setExcluded($0, bundleIdentifier: entry.bundleID) }
                     )) {
                         HStack {
-                            if let icon = app.icon { Image(nsImage: icon).resizable().frame(width: 22, height: 22) }
+                            if let icon = entry.icon {
+                                Image(nsImage: icon).resizable().frame(width: 22, height: 22)
+                            }
                             VStack(alignment: .leading) {
-                                Text(app.localizedName ?? bundleID)
-                                Text(bundleID).font(.caption).foregroundStyle(.secondary)
+                                Text(entry.name)
+                                Text(entry.bundleID).font(.caption).foregroundStyle(.secondary)
                             }
                         }
                     }
@@ -64,6 +65,36 @@ struct PrivacyView: View {
         .formStyle(.grouped)
         .navigationTitle("Privacy")
         .onAppear(perform: refreshRunningApplications)
+        .onReceive(
+            NSWorkspace.shared.notificationCenter
+                .publisher(for: NSWorkspace.didLaunchApplicationNotification)
+        ) { _ in refreshRunningApplications() }
+        .onReceive(
+            NSWorkspace.shared.notificationCenter
+                .publisher(for: NSWorkspace.didTerminateApplicationNotification)
+        ) { _ in refreshRunningApplications() }
+    }
+
+    /// Running applications plus every excluded bundle identifier, so an exclusion stays
+    /// visible and removable after the application quits.
+    private var listedApplications: [ApplicationEntry] {
+        var entries = runningApps.map { app in
+            ApplicationEntry(
+                bundleID: app.bundleIdentifier ?? "",
+                name: app.localizedName ?? app.bundleIdentifier ?? "",
+                icon: app.icon
+            )
+        }
+        let listed = Set(entries.map(\.bundleID))
+        for bundleID in controller.privacySettings.excludedBundleIdentifiers where !listed.contains(bundleID) {
+            let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+            entries.append(ApplicationEntry(
+                bundleID: bundleID,
+                name: url?.deletingPathExtension().lastPathComponent ?? bundleID,
+                icon: url.map { NSWorkspace.shared.icon(forFile: $0.path) }
+            ))
+        }
+        return entries.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     private func refreshRunningApplications() {
@@ -72,6 +103,12 @@ struct PrivacyView: View {
             .uniqued(by: \.bundleIdentifier)
             .sorted { ($0.localizedName ?? "") < ($1.localizedName ?? "") }
     }
+}
+
+private struct ApplicationEntry {
+    let bundleID: String
+    let name: String
+    let icon: NSImage?
 }
 
 private extension Array {

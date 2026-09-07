@@ -29,12 +29,24 @@ struct SetOfMarksBuilder: Sendable {
     func build(scene: ScreenScene, maximumMarks: Int = 80, query: String? = nil) -> [SetOfMark] {
         guard maximumMarks > 0 else { return [] }
         let viewport = scene.screenshot?.displayBounds ?? scene.activeWindow?.bounds
+        // Relevance scoring tokenizes both strings, so it is computed once per element
+        // rather than inside the comparator, where a large tree would run it thousands
+        // of times.
         let accessible = scene.elements
             .filter { element in
                 guard element.enabled, let bounds = element.bounds, bounds.isValid else { return false }
                 return viewport.map { visible($0, contains: bounds) } != false
             }
-            .sorted { accessibilityOrder($0, $1, query: query) }
+            .map { element in
+                (
+                    element: element,
+                    score: query.map {
+                        SemanticElementMatcher.relevanceScore(query: $0, candidate: element.bestLabel)
+                    } ?? 0
+                )
+            }
+            .sorted { accessibilityOrder($0, $1) }
+            .map(\.element)
 
         let accessibilityBounds = accessible.compactMap(\.bounds)
         let visual = scene.visualElements
@@ -43,7 +55,9 @@ struct SetOfMarksBuilder: Sendable {
                     && viewport.map { visible($0, contains: element.bounds) } != false
                     && !accessibilityBounds.contains(where: { overlapRatio($0, element.bounds) > 0.58 })
             }
-            .sorted { visualOrder($0, $1, query: query) }
+            .map { (element: $0, score: queryPriority(for: $0, query: query)) }
+            .sorted { visualOrder($0, $1) }
+            .map(\.element)
 
         let desiredVisualCount = max(maximumMarks >= 24 ? 12 : 1, maximumMarks / 3)
         let maximumVisualCount = accessible.isEmpty ? maximumMarks : max(0, maximumMarks - 1)
@@ -100,34 +114,32 @@ struct SetOfMarksBuilder: Sendable {
     }
 
     private func accessibilityOrder(
-        _ lhs: UIElementDescriptor,
-        _ rhs: UIElementDescriptor,
-        query: String?
+        _ lhs: (element: UIElementDescriptor, score: Double),
+        _ rhs: (element: UIElementDescriptor, score: Double)
     ) -> Bool {
-        let lhsQueryScore = query.map { SemanticElementMatcher.relevanceScore(query: $0, candidate: lhs.bestLabel) } ?? 0
-        let rhsQueryScore = query.map { SemanticElementMatcher.relevanceScore(query: $0, candidate: rhs.bestLabel) } ?? 0
-        if lhsQueryScore != rhsQueryScore { return lhsQueryScore > rhsQueryScore }
-        if lhs.focused != rhs.focused { return lhs.focused }
-        let lhsLabelled = lhs.bestLabel != "Unlabelled control"
-        let rhsLabelled = rhs.bestLabel != "Unlabelled control"
+        if lhs.score != rhs.score { return lhs.score > rhs.score }
+        if lhs.element.focused != rhs.element.focused { return lhs.element.focused }
+        let lhsLabelled = lhs.element.bestLabel != "Unlabelled control"
+        let rhsLabelled = rhs.element.bestLabel != "Unlabelled control"
         if lhsLabelled != rhsLabelled { return lhsLabelled }
-        let lhsArea = lhs.bounds.map { $0.width * $0.height } ?? 0
-        let rhsArea = rhs.bounds.map { $0.width * $0.height } ?? 0
+        let lhsArea = lhs.element.bounds.map { $0.width * $0.height } ?? 0
+        let rhsArea = rhs.element.bounds.map { $0.width * $0.height } ?? 0
         if lhsArea != rhsArea { return lhsArea > rhsArea }
-        return lhs.id < rhs.id
+        return lhs.element.id < rhs.element.id
     }
 
     private func visualOrder(
-        _ lhs: VisualElementDescriptor,
-        _ rhs: VisualElementDescriptor,
-        query: String?
+        _ lhs: (element: VisualElementDescriptor, score: Double),
+        _ rhs: (element: VisualElementDescriptor, score: Double)
     ) -> Bool {
-        let lhsQueryScore = queryPriority(for: lhs, query: query)
-        let rhsQueryScore = queryPriority(for: rhs, query: query)
-        if lhsQueryScore != rhsQueryScore { return lhsQueryScore > rhsQueryScore }
-        if lhs.confidence != rhs.confidence { return lhs.confidence > rhs.confidence }
-        if lhs.kind != rhs.kind { return lhs.kind.rawValue < rhs.kind.rawValue }
-        return lhs.id < rhs.id
+        if lhs.score != rhs.score { return lhs.score > rhs.score }
+        if lhs.element.confidence != rhs.element.confidence {
+            return lhs.element.confidence > rhs.element.confidence
+        }
+        if lhs.element.kind != rhs.element.kind {
+            return lhs.element.kind.rawValue < rhs.element.kind.rawValue
+        }
+        return lhs.element.id < rhs.element.id
     }
 
     private func queryPriority(for element: VisualElementDescriptor, query: String?) -> Double {
@@ -186,9 +198,14 @@ struct SetOfMarksRenderer: Sendable {
         context.setStrokeColor(CGColor(red: 0.05, green: 0.65, blue: 1, alpha: 1))
 
         for mark in marks {
-            let rect = pixelRect(for: mark.bounds, snapshot: snapshot, image: image)
+            guard let rect = pixelRect(for: mark.bounds, snapshot: snapshot, image: image) else { continue }
             context.stroke(rect)
-            drawBadge(mark.id, at: CGPoint(x: rect.minX, y: rect.maxY), in: context, imageWidth: image.width)
+            drawBadge(
+                mark.id,
+                at: CGPoint(x: rect.minX, y: rect.maxY),
+                in: context,
+                imageSize: CGSize(width: image.width, height: image.height)
+            )
         }
 
         guard let output = context.makeImage() else { throw ScreenCaptureError.encodingFailed }
@@ -204,9 +221,20 @@ struct SetOfMarksRenderer: Sendable {
         return MarkedScreenScene(snapshot: markedSnapshot, marks: marks)
     }
 
-    private func drawBadge(_ number: Int, at point: CGPoint, in context: CGContext, imageWidth: Int) {
-        let radius = max(10, CGFloat(imageWidth) / 120)
-        let badge = CGRect(x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2)
+    private func drawBadge(_ number: Int, at point: CGPoint, in context: CGContext, imageSize: CGSize) {
+        let radius = max(10, imageSize.width / 120)
+        // Menu bar and sidebar marks sit on the image edge, where a badge centred on the
+        // corner would be clipped and its digit made unreadable to a vision model.
+        let center = CGPoint(
+            x: min(max(point.x, radius), imageSize.width - radius),
+            y: min(max(point.y, radius), imageSize.height - radius)
+        )
+        let badge = CGRect(
+            x: center.x - radius,
+            y: center.y - radius,
+            width: radius * 2,
+            height: radius * 2
+        )
         context.setFillColor(CGColor(red: 0.05, green: 0.55, blue: 1, alpha: 1))
         context.fillEllipse(in: badge)
 
@@ -224,12 +252,14 @@ struct SetOfMarksRenderer: Sendable {
         CTLineDraw(line, context)
     }
 
-    private func pixelRect(for rect: NormalizedRect, snapshot: ScreenSnapshot, image: CGImage) -> CGRect {
+    /// Nil when the mark lies outside this display, so it is skipped instead of being
+    /// drawn as a badge at the bitmap origin.
+    private func pixelRect(for rect: NormalizedRect, snapshot: ScreenSnapshot, image: CGImage) -> CGRect? {
         CoordinateSpaceMapper.bitmapDrawingRect(
             from: rect,
             pixelSize: CGSize(width: image.width, height: image.height),
             displayBounds: snapshot.displayBounds
-        ) ?? .zero
+        )
     }
 
     private func pngData(from image: CGImage) throws -> Data {

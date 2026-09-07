@@ -44,6 +44,7 @@ struct ModelSettingsView: View {
                         .labelsHidden()
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: .infinity)
+                        .disabled(controller.modelSettings.isMutatingAPIKey)
 
                         HStack(spacing: 8) {
                             Button("Save in Keychain") {
@@ -54,7 +55,10 @@ struct ModelSettingsView: View {
                                     } catch { keyStatus = error.localizedDescription }
                                 }
                             }
-                            .disabled(apiKeyDraftIsEmpty || controller.modelSettings.isLoadingAPIKey)
+                            .disabled(
+                                apiKeyDraftIsEmpty || controller.modelSettings.isLoadingAPIKey
+                                    || controller.modelSettings.isMutatingAPIKey
+                            )
                             Button(role: .destructive) {
                                 isConfirmingAPIKeyRemoval = true
                             } label: {
@@ -62,7 +66,11 @@ struct ModelSettingsView: View {
                             }
                             .buttonStyle(.bordered)
                             .tint(.red)
-                            .disabled(!controller.modelSettings.hasStoredAPIKey || controller.modelSettings.isLoadingAPIKey)
+                            .disabled(
+                                !controller.modelSettings.hasStoredAPIKey
+                                    || controller.modelSettings.isLoadingAPIKey
+                                    || controller.modelSettings.isMutatingAPIKey
+                            )
                             .help("Remove API key from Keychain")
                             .accessibilityLabel("Remove API key from Keychain")
                             Text(apiKeyStatus)
@@ -111,6 +119,7 @@ struct ModelSettingsView: View {
 
     private var apiKeyStatus: String {
         if controller.modelSettings.isLoadingAPIKey { return "Loading from Keychain…" }
+        if controller.modelSettings.isMutatingAPIKey { return "Updating Keychain…" }
         if !keyStatus.isEmpty { return keyStatus }
         return controller.modelSettings.hasStoredAPIKey ? "Stored in Keychain" : "Not saved"
     }

@@ -2,7 +2,7 @@
 
 **Ask. See. Do.**
 
-Beacon is an open-source, privacy-first macOS instructor. Press **Option + Space**, ask how to do something in the app in front of you, and Beacon highlights the real accessible control without taking over your mouse.
+Beacon is a privacy-first macOS instructor. Press **Option + Space**, ask how to do something in the app in front of you, and Beacon highlights the real accessible control without taking over your mouse.
 
 This repository contains the native v0.1 grounding prototype and verified multi-step guide loop described in the product brief.
 
@@ -15,9 +15,9 @@ This repository contains the native v0.1 grounding prototype and verified multi-
 - Focused-app Accessibility tree extraction with stable per-scene element IDs
 - One normalized, top-left coordinate space across Retina and multiple displays
 - Click-through rectangle, circle, and spotlight overlays, with arrows that stop outside the target edge
-- Solid-color guidance arrows and a live proximity fade that reveals the interface beneath nearby Beacon guidance
+- Solid-color guidance arrows and messages that start fully visible, then fade near the pointer after it moves
 - Focus-safe teacher status HUD that explains when Beacon is checking or waiting for the user
-- Stale-scene protection that tolerates transient UI updates, pauses vanished targets, and resumes after menus or windows are restored
+- Stale-scene protection that follows app/window changes with fresh guidance and waits for vanished controls or closed menus to return
 - Overlay target tracking while windows move
 - Local deterministic semantic element matching
 - Local Vision OCR plus rectangle, circle, icon, and freeform-shape detection
@@ -25,8 +25,9 @@ This repository contains the native v0.1 grounding prototype and verified multi-
 - Typed provider boundary, Apple Foundation Models adapter, and optional OpenAI adapter
 - Bounded model contexts with native structured Apple Foundation Models output
 - Verified multi-step guides with an eight-step safety limit
-- Expected-outcome verification across intermediate Accessibility events and new-window app handoffs, with a bounded low-rate fallback
-- Tested recovery recipes for TextEdit, Preview, Finder, Safari, and System Settings
+- Specific control/value/window outcome checks, with explicit confirmation when success cannot be established locally
+- Window identity and display-change invalidation to prevent stale guidance
+- Fixture-tested recipes for TextEdit, Preview, Finder, Safari, and System Settings; real-app acceptance testing remains required
 - ScreenCaptureKit privacy preview with local password, email, phone, card, and API-key redaction
 - Per-application capture exclusions plus separate cloud-text and redacted-image opt-ins
 - Optional Developer Inspector and live “draw all elements” overlay, hidden by default
@@ -40,7 +41,7 @@ Beacon never clicks UI controls in v0.1.
 - Accessibility permission for UI grounding
 - Screen Recording permission for screenshots and the privacy preview (optional for accessibility-only grounding)
 
-Apple Foundation Models are compiled and offered on macOS 26+. The deterministic accessibility and local-vision matcher remains the default and requires no model download or API key. Optional OpenAI visual reasoning requires both cloud processing and the separate redacted-preview consent toggle; the exact numbered image is shown under **Privacy**.
+Apple Foundation Models are compiled on every supported system and used only on macOS 26 or newer with Apple Intelligence available. The provider list always offers Apple Intelligence; selecting it on an older system falls back to the local Accessibility matcher. The deterministic accessibility and local-vision matcher remains the default and requires no model download or API key. Optional OpenAI visual reasoning requires both cloud processing and the separate redacted-preview consent toggle; the exact numbered image is shown under **Privacy**.
 
 ## Build and run
 
@@ -60,6 +61,12 @@ swift test
 ```
 
 Running the packaged app is recommended because macOS attaches privacy permissions to the app bundle identity.
+
+The build script uses ad-hoc signing by default for local testing. An ad-hoc signature is identified only by its code hash, which changes on every build, so macOS treats each rebuild as a different application: re-enable Beacon under **Privacy & Security → Accessibility** and **Screen Recording** after rebuilding, and expect a Keychain prompt the first time a stored API key is read. Set `BEACON_SIGNING_IDENTITY` to a stable signing identity to keep those grants across builds. Set `BEACON_BUILD_UNIVERSAL=1` to include Apple Silicon and Intel binaries. For distribution, set `BEACON_SIGNING_IDENTITY` to your Developer ID Application identity; this enables hardened runtime and a secure timestamp. Use `scripts/release-app.sh prepare` for a signed universal candidate, test it, then explicitly notarize that exact bundle using `scripts/release-app.sh notarize /path/to/Beacon.app`. See [release setup](Docs/DEVELOPMENT.md#release-checklist). See the [release review and manual test plan](Docs/RELEASE_REVIEW.md) before distributing a build.
+
+Pause Screen Access, Escape, and Dismiss Overlay stop active guidance. Escape is handled by whichever Beacon window is in front, so it still closes an ordinary dialog without cancelling a guide. Changes to cloud consent or application exclusions cancel the current request and discard pending results; start a new request after changing privacy settings. If a configured reasoning provider fails, Beacon reports the failure beside the pointer and falls back to local matching, whether or not the main window is open. A missing matching control does not establish that the task is complete. Ambiguous results appear under **Check the result** in Home and in the menu: choose **Confirm Result** only after checking the result, or **That Didn’t Work** to stop. Cancelling an export dialog never confirms a saved file. A real display layout change stops guidance and requires a new request; the Dock or menu bar changing size does not.
+
+Requests can span applications: for example, start in Safari and use Apple → About This Mac to find memory information. When the active app or window changes, Beacon removes the old highlight and reassesses the new screen with the same question and completed-step history. Focus changes alone do not confirm a step. Each request allows up to eight such reassessments, and the destination app's privacy exclusions still apply. New instructions, answers, and thinking messages appear at full opacity even if the pointer is already over them; moving it enables the proximity fade.
 
 ## First grounding check
 

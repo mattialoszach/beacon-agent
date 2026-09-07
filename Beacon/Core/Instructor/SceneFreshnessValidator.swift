@@ -1,6 +1,7 @@
 import Foundation
 
 enum SceneFreshnessIssue: Equatable, Sendable {
+    case displaysChanged
     case applicationChanged(expectedApplication: String)
     case windowChanged(expectedWindow: String?, application: String)
     case menuClosed(label: String, application: String)
@@ -10,6 +11,8 @@ enum SceneFreshnessIssue: Equatable, Sendable {
 
     var recoveryMessage: String {
         switch self {
+        case .displaysChanged:
+            "The display layout changed. Start a new request so Beacon can locate the controls again."
         case let .applicationChanged(expectedApplication):
             "Beacon paused because \(expectedApplication) is no longer in front. Return to it and restore the previous screen."
         case let .windowChanged(expectedWindow, application):
@@ -33,26 +36,35 @@ enum SceneFreshnessIssue: Equatable, Sendable {
 enum SceneFreshnessResult: Equatable, Sendable {
     case valid(target: GroundedTarget)
     case stale(SceneFreshnessIssue)
+    case inconclusive
+}
+
+enum SceneContextFreshnessResult: Equatable, Sendable {
+    case valid
+    case stale(SceneFreshnessIssue)
+    case inconclusive
 }
 
 struct SceneFreshnessValidator: Sendable {
-    func contextIssue(source: ScreenScene, latest: ScreenScene) -> SceneFreshnessIssue? {
+    func contextStatus(source: ScreenScene, latest: ScreenScene) -> SceneContextFreshnessResult {
+        guard SceneIdentity.sameDisplays(source, latest) else { return .stale(.displaysChanged) }
         guard source.activeApplication.processIdentifier == latest.activeApplication.processIdentifier,
               source.activeApplication.bundleIdentifier == latest.activeApplication.bundleIdentifier else {
-            return .applicationChanged(expectedApplication: source.activeApplication.name)
+            return .stale(.applicationChanged(expectedApplication: source.activeApplication.name))
         }
-        guard normalized(source.activeWindow?.title) == normalized(latest.activeWindow?.title) else {
-            return .windowChanged(
+        guard SceneIdentity.sameWindow(source.activeWindow, latest.activeWindow) else {
+            return .stale(.windowChanged(
                 expectedWindow: source.activeWindow?.title,
                 application: source.activeApplication.name
-            )
+            ))
         }
-        guard !SceneSemanticFingerprint(source).isMateriallyDifferent(
-            from: SceneSemanticFingerprint(latest)
-        ) else {
-            return .interfaceChanged(application: source.activeApplication.name)
+        guard !source.isTruncated, !latest.isTruncated else {
+            return .inconclusive
         }
-        return nil
+        guard !isSemanticallyDifferent(source: source, latest: latest) else {
+            return .stale(.interfaceChanged(application: source.activeApplication.name))
+        }
+        return .valid
     }
 
     func validate(
@@ -60,12 +72,13 @@ struct SceneFreshnessValidator: Sendable {
         latest: ScreenScene,
         target: GroundedTarget
     ) -> SceneFreshnessResult {
+        guard SceneIdentity.sameDisplays(source, latest) else { return .stale(.displaysChanged) }
         guard source.activeApplication.processIdentifier == latest.activeApplication.processIdentifier,
               source.activeApplication.bundleIdentifier == latest.activeApplication.bundleIdentifier else {
             return .stale(.applicationChanged(expectedApplication: source.activeApplication.name))
         }
 
-        guard normalized(source.activeWindow?.title) == normalized(latest.activeWindow?.title) else {
+        guard SceneIdentity.sameWindow(source.activeWindow, latest.activeWindow) else {
             return .stale(.windowChanged(
                 expectedWindow: source.activeWindow?.title,
                 application: source.activeApplication.name
@@ -93,20 +106,37 @@ struct SceneFreshnessValidator: Sendable {
                 ))
             }
             refreshedTarget = .accessibilityElement(elementId: elementID, bounds: bounds)
+
+            // A bounded AX walk can be incomplete in large applications even though it
+            // captured the requested control. For an Accessibility target, the current
+            // app/window/display identity plus the target's stable identity, enabled
+            // state, and fresh bounds are sufficient to present it safely. Requiring a
+            // complete second walk here makes the same large hierarchy fail forever.
+            if source.isTruncated || latest.isTruncated {
+                return .valid(target: refreshedTarget)
+            }
         case .visualRegion, .point:
+            guard source.activeWindow?.bounds == latest.activeWindow?.bounds else {
+                return .stale(.visualContextUnavailable(application: source.activeApplication.name))
+            }
             refreshedTarget = target
         }
 
-        guard !SceneSemanticFingerprint(source).isMateriallyDifferent(
-            from: SceneSemanticFingerprint(latest)
-        ) else {
+        // Visual targets and whole-interface comparisons still fail closed because an
+        // incomplete AX tree cannot establish that their surrounding context is stable.
+        guard !source.isTruncated, !latest.isTruncated else {
+            return .inconclusive
+        }
+        guard !isSemanticallyDifferent(source: source, latest: latest) else {
             return .stale(.interfaceChanged(application: source.activeApplication.name))
         }
         return .valid(target: refreshedTarget)
     }
 
-    private func normalized(_ value: String?) -> String? {
-        value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    private func isSemanticallyDifferent(source: ScreenScene, latest: ScreenScene) -> Bool {
+        return SceneSemanticFingerprint(source).isMateriallyDifferent(
+            from: SceneSemanticFingerprint(latest)
+        )
     }
 }
 
@@ -135,12 +165,14 @@ private struct SceneSemanticFingerprint {
 }
 
 private struct ElementIdentity: Equatable, Hashable {
+    let windowID: String?
     let role: String?
     let subrole: String?
     let label: String?
     let title: String?
 
     init(_ element: UIElementDescriptor) {
+        windowID = element.windowID
         role = Self.normalized(element.role)
         subrole = Self.normalized(element.subrole)
         label = Self.normalized(element.label)

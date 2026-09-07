@@ -5,6 +5,10 @@ struct GuideRecipeStep: Equatable, Sendable {
     let targetAliases: [String]
     let expectedOutcome: ExpectedOutcome
     let overlay: OverlayStyle
+    var targetRole: String? = nil
+    var canSkipIfNextVisible = false
+    var alreadySatisfiedBy: ExpectedElement? = nil
+    var prerequisite: ExpectedElement? = nil
 }
 
 struct ApplicationGuideRecipe: Equatable, Sendable {
@@ -89,7 +93,7 @@ struct ApplicationGuidePolicyRegistry: Sendable {
         ApplicationGuidePolicy(
             bundleIdentifier: "com.apple.TextEdit",
             recipes: [
-                exportPDFRecipe(exportAliases: ["Export as PDF", "Export as PDF…", "PDF"]),
+                exportPDFRecipe(preview: false),
                 printRecipe
             ],
             recoveryHint: "In TextEdit, keep the document window active and leave any File menu or save sheet open.",
@@ -99,7 +103,7 @@ struct ApplicationGuidePolicyRegistry: Sendable {
         ApplicationGuidePolicy(
             bundleIdentifier: "com.apple.Preview",
             recipes: [
-                exportPDFRecipe(exportAliases: ["Export", "Export…", "PDF"]),
+                exportPDFRecipe(preview: true),
                 printRecipe
             ],
             recoveryHint: "In Preview, keep the document window active and leave any File menu or export sheet open.",
@@ -114,7 +118,7 @@ struct ApplicationGuidePolicyRegistry: Sendable {
                     requestTerms: ["new", "folder"],
                     minimumRequestTermMatches: 2,
                     steps: [
-                        menuStep("Open the File menu.", aliases: ["File"]),
+                        menuStep("Open the File menu.", aliases: ["File"], reveals: ["New Folder"]),
                         GuideRecipeStep(
                             instruction: "Choose New Folder.",
                             targetAliases: ["New Folder"],
@@ -138,13 +142,14 @@ struct ApplicationGuidePolicyRegistry: Sendable {
                     id: "open-settings",
                     requestTerms: ["settings", "preferences"],
                     steps: [
-                        menuStep("Open the Safari menu.", aliases: ["Safari"]),
+                        menuStep("Open the Safari menu.", aliases: ["Safari"], reveals: ["Settings", "Preferences"]),
                         GuideRecipeStep(
                             instruction: "Choose Settings.",
                             targetAliases: ["Settings…", "Settings", "Preferences…", "Preferences"],
                             expectedOutcome: ExpectedOutcome(
                                 type: .windowAppears,
-                                description: "Safari Settings should appear."
+                                description: "Safari Settings should appear.",
+                                element: ExpectedElement(labels: ["General"])
                             ),
                             overlay: .spotlight
                         )
@@ -168,7 +173,8 @@ struct ApplicationGuidePolicyRegistry: Sendable {
                             targetAliases: ["Privacy & Security", "Privacy"],
                             expectedOutcome: ExpectedOutcome(
                                 type: .elementAppears,
-                                description: "Privacy controls should appear."
+                                description: "Privacy controls should appear.",
+                                element: ExpectedElement(labels: ["Screen & System Audio Recording", "Screen Recording"])
                             ),
                             overlay: .spotlight
                         ),
@@ -177,7 +183,8 @@ struct ApplicationGuidePolicyRegistry: Sendable {
                             targetAliases: ["Screen & System Audio Recording", "Screen Recording"],
                             expectedOutcome: ExpectedOutcome(
                                 type: .elementAppears,
-                                description: "The screen-recording application list should appear."
+                                description: "The screen-recording application list should appear.",
+                                element: ExpectedElement(labels: ["Beacon"], role: "AXCheckBox")
                             ),
                             overlay: .spotlight
                         ),
@@ -186,9 +193,15 @@ struct ApplicationGuidePolicyRegistry: Sendable {
                             targetAliases: ["Beacon"],
                             expectedOutcome: ExpectedOutcome(
                                 type: .visualChange,
-                                description: "Beacon's screen-recording permission should become enabled."
+                                description: "Beacon's screen-recording permission should become enabled.",
+                                element: ExpectedElement(labels: ["Beacon"], role: "AXCheckBox", value: "1")
                             ),
-                            overlay: .spotlight
+                            overlay: .spotlight,
+                            // A value change can never be observed when the switch is
+                            // already on, so that state completes the step instead.
+                            alreadySatisfiedBy: ExpectedElement(
+                                labels: ["Beacon"], role: "AXCheckBox", value: "1"
+                            )
                         )
                     ]
                 )
@@ -199,61 +212,79 @@ struct ApplicationGuidePolicyRegistry: Sendable {
         )
     ]
 
-    private static func exportPDFRecipe(exportAliases: [String]) -> ApplicationGuideRecipe {
-        ApplicationGuideRecipe(
-            id: "export-pdf",
-            requestTerms: ["export", "pdf"],
-            minimumRequestTermMatches: 2,
-            steps: [
-                menuStep("Open the File menu.", aliases: ["File"]),
+    private static func exportPDFRecipe(preview: Bool) -> ApplicationGuideRecipe {
+        let exportAliases = preview ? ["Export", "Export…"] : ["Export as PDF", "Export as PDF…"]
+        let pdfFormat = ExpectedElement(labels: ["Format"], role: "AXPopUpButton", value: "PDF")
+        // A plain Save sheet also contains exactly one enabled Save button, so that alone
+        // cannot prove the export sheet appeared. Preview's export sheet is identified by
+        // its Format popup; TextEdit's has no control the save sheet lacks, so its step
+        // asks the user to confirm rather than risk recording a wrong success.
+        let exportSheetEvidence = preview
+            ? ExpectedOutcome(
+                type: .windowAppears,
+                description: "The export sheet with a Format popup should appear.",
+                element: ExpectedElement(labels: ["Format"], role: "AXPopUpButton")
+            )
+            : ExpectedOutcome(
+                type: .windowAppears,
+                description: "The Export as PDF sheet should appear. Check that it is the export sheet and not the ordinary Save sheet."
+            )
+        var steps = [
+            menuStep("Open the File menu.", aliases: ["File"], reveals: exportAliases),
+            GuideRecipeStep(
+                instruction: "Choose the PDF export command.",
+                targetAliases: exportAliases,
+                expectedOutcome: exportSheetEvidence,
+                overlay: .spotlight, targetRole: "AXMenuItem", canSkipIfNextVisible: true
+            )
+        ]
+        if preview {
+            steps += [
                 GuideRecipeStep(
-                    instruction: "Choose the PDF export command.",
-                    targetAliases: exportAliases,
-                    expectedOutcome: ExpectedOutcome(
-                        type: .windowAppears,
-                        description: "An export or save sheet should appear."
-                    ),
-                    overlay: .spotlight
+                    instruction: "Open the Format menu in the export sheet.",
+                    targetAliases: ["Format"],
+                    expectedOutcome: ExpectedOutcome(type: .elementAppears, description: "The PDF format option should appear.",
+                        element: ExpectedElement(labels: ["PDF"], role: "AXMenuItem")),
+                    overlay: .spotlight, targetRole: "AXPopUpButton", canSkipIfNextVisible: true,
+                    alreadySatisfiedBy: pdfFormat
                 ),
                 GuideRecipeStep(
-                    instruction: "Choose Save to finish exporting the PDF.",
-                    targetAliases: ["Save", "Export"],
-                    expectedOutcome: ExpectedOutcome(
-                        type: .windowDisappears,
-                        description: "The export sheet should close."
-                    ),
-                    overlay: .spotlight
+                    instruction: "Choose PDF as the export format.",
+                    targetAliases: ["PDF"],
+                    expectedOutcome: ExpectedOutcome(type: .visualChange, description: "Format should be set to PDF.", element: pdfFormat),
+                    overlay: .spotlight, targetRole: "AXMenuItem", alreadySatisfiedBy: pdfFormat
                 )
             ]
-        )
+        }
+        steps.append(GuideRecipeStep(
+            instruction: "Choose Save to finish exporting the PDF.",
+            targetAliases: ["Save"],
+            expectedOutcome: ExpectedOutcome(type: .windowDisappears,
+                description: "Check that the PDF was saved at your chosen location. Closing or cancelling the sheet does not confirm an export."),
+            overlay: .spotlight, targetRole: "AXButton", prerequisite: preview ? pdfFormat : nil
+        ))
+        return ApplicationGuideRecipe(id: "export-pdf", requestTerms: ["export", "pdf"],
+            minimumRequestTermMatches: 2, steps: steps)
     }
 
     private static let printRecipe = ApplicationGuideRecipe(
-        id: "print",
-        requestTerms: ["print"],
-        steps: [
-            menuStep("Open the File menu.", aliases: ["File"]),
+        id: "print", requestTerms: ["print"], steps: [
+            menuStep("Open the File menu.", aliases: ["File"], reveals: ["Print"]),
             GuideRecipeStep(
-                instruction: "Choose Print.",
-                targetAliases: ["Print…", "Print"],
-                expectedOutcome: ExpectedOutcome(
-                    type: .windowAppears,
-                    description: "The print sheet should appear."
-                ),
-                overlay: .spotlight
+                instruction: "Choose Print.", targetAliases: ["Print…", "Print"],
+                expectedOutcome: ExpectedOutcome(type: .windowAppears, description: "The print sheet should appear.",
+                    element: ExpectedElement(labels: ["Print"], role: "AXButton")),
+                overlay: .spotlight, targetRole: "AXMenuItem"
             )
         ]
     )
 
-    private static func menuStep(_ instruction: String, aliases: [String]) -> GuideRecipeStep {
+    private static func menuStep(_ instruction: String, aliases: [String], reveals: [String]) -> GuideRecipeStep {
         GuideRecipeStep(
-            instruction: instruction,
-            targetAliases: aliases,
-            expectedOutcome: ExpectedOutcome(
-                type: .elementAppears,
-                description: "The menu commands should appear."
-            ),
-            overlay: .spotlight
+            instruction: instruction, targetAliases: aliases,
+            expectedOutcome: ExpectedOutcome(type: .elementAppears, description: "The requested menu command should appear.",
+                element: ExpectedElement(labels: reveals, role: "AXMenuItem")),
+            overlay: .spotlight, targetRole: "AXMenuBarItem", canSkipIfNextVisible: true
         )
     }
 }
@@ -267,7 +298,10 @@ struct ApplicationGuidePlanner: Sendable {
 
     func response(for request: InstructorRequest) -> InstructorResponse? {
         guard let recipe = registry.recipe(for: request) else { return nil }
-        let completedCount = request.guideContext?.completedSteps.count ?? 0
+        let completed = request.guideContext?.completedSteps ?? []
+        let completedCount = recipe.steps.lastIndex(where: { step in
+            completed.contains { $0.instruction == step.instruction }
+        }).map { $0 + 1 } ?? 0
         guard completedCount < recipe.steps.count else {
             return InstructorResponse(
                 message: "The guided steps are complete.",
@@ -277,80 +311,57 @@ struct ApplicationGuidePlanner: Sendable {
             )
         }
 
-        let current = match(step: recipe.steps[completedCount], request: request)
-        let next = recipe.steps.indices.contains(completedCount + 1)
-            ? match(step: recipe.steps[completedCount + 1], request: request)
-            : nil
-        let selected: StepMatch?
-        if let current, current.opensNavigation, let next {
-            selected = next
-        } else {
-            selected = current ?? next
+        var index = completedCount
+        while index < recipe.steps.count,
+              let selector = recipe.steps[index].alreadySatisfiedBy,
+              matchesUnique(selector, in: request.scene) {
+            index += 1
         }
-        guard let selected else { return nil }
-
+        guard index < recipe.steps.count else {
+            // Every remaining step is already satisfied, so the task is done.
+            return InstructorResponse(
+                message: "That is already set up the way you asked.",
+                action: nil,
+                expectedOutcome: nil,
+                taskComplete: true
+            )
+        }
+        var step = recipe.steps[index]
+        // Only navigation can be skipped, and only when its next control is already visible.
+        if step.canSkipIfNextVisible, recipe.steps.indices.contains(index + 1),
+           match(step: recipe.steps[index + 1], request: request) != nil {
+            index += 1
+            step = recipe.steps[index]
+        }
+        guard let selected = match(step: step, request: request) else {
+            // Before the recipe has committed to anything, an unmatched control usually
+            // means a localized or restructured interface, not a stuck task. Defer to the
+            // model instead of dead-ending a request it could still answer.
+            guard completedCount > 0 else { return nil }
+            return InstructorResponse(
+                message: "I can’t safely locate the next control. \(step.instruction) Keep the intended window or sheet visible, then start a new request.",
+                action: nil, expectedOutcome: nil, taskComplete: false
+            )
+        }
         return InstructorResponse(
-            message: selected.step.instruction,
-            action: SuggestedAction(
-                type: .pointToElement,
-                targetElementId: selected.elementID,
-                targetBounds: nil,
-                targetMark: selected.markID,
-                overlay: selected.step.overlay
-            ),
-            expectedOutcome: selected.step.expectedOutcome,
-            taskComplete: false
+            message: step.instruction,
+            action: SuggestedAction(type: .pointToElement, targetElementId: selected.id,
+                targetBounds: nil, overlay: step.overlay),
+            expectedOutcome: step.expectedOutcome, taskComplete: false
         )
     }
 
-    private func match(step: GuideRecipeStep, request: InstructorRequest) -> StepMatch? {
-        let completedIDs = Set(request.guideContext?.completedSteps.compactMap(\.targetElementID) ?? [])
-        let elements = request.scene.elements.filter { !completedIDs.contains($0.id) && $0.enabled && $0.bounds != nil }
-        if let element = elements.max(by: {
-            aliasScore($0.bestLabel, aliases: step.targetAliases) < aliasScore($1.bestLabel, aliases: step.targetAliases)
-        }), aliasScore(element.bestLabel, aliases: step.targetAliases) > 0 {
-            return StepMatch(
-                step: step,
-                elementID: element.id,
-                markID: nil,
-                opensNavigation: element.role == "AXMenuBarItem"
-                    || step.expectedOutcome.description == "The menu commands should appear."
-            )
-        }
-
-        if let mark = request.setOfMarks.max(by: {
-            aliasScore($0.label, aliases: step.targetAliases) < aliasScore($1.label, aliases: step.targetAliases)
-        }), aliasScore(mark.label, aliases: step.targetAliases) > 0 {
-            return StepMatch(
-                step: step,
-                elementID: mark.elementID,
-                markID: mark.elementID == nil ? mark.id : nil,
-                opensNavigation: false
-            )
-        }
-        return nil
+    private func matchesUnique(_ selector: ExpectedElement, in scene: ScreenScene) -> Bool {
+        SceneIdentity.elements(in: scene, windowID: scene.activeWindow?.id)
+            .filter { $0.enabled && selector.matches($0) }.count == 1
     }
 
-    private func aliasScore(_ candidate: String, aliases: [String]) -> Double {
-        let normalizedCandidate = normalized(candidate)
-        return aliases.map { alias -> Double in
-            let normalizedAlias = normalized(alias)
-            if normalizedCandidate == normalizedAlias { return 1 }
-            if normalizedCandidate.contains(normalizedAlias) || normalizedAlias.contains(normalizedCandidate) { return 0.75 }
-            return SemanticElementMatcher.relevanceScore(query: alias, candidate: candidate) * 0.6
-        }.max() ?? 0
-    }
-
-    private func normalized(_ value: String) -> String {
-        value.lowercased()
-            .replacingOccurrences(of: "…", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private struct StepMatch {
-        let step: GuideRecipeStep
-        let elementID: String?
-        let markID: Int?
-        let opensNavigation: Bool
+    private func match(step: GuideRecipeStep, request: InstructorRequest) -> UIElementDescriptor? {
+        if let prerequisite = step.prerequisite, !matchesUnique(prerequisite, in: request.scene) { return nil }
+        let selector = ExpectedElement(labels: step.targetAliases, role: step.targetRole)
+        let elements = SceneIdentity.elements(in: request.scene, windowID: request.scene.activeWindow?.id)
+            .filter { $0.enabled && $0.bounds?.isValid == true && selector.matches($0) }
+        guard elements.count == 1 else { return nil }
+        return elements.first
     }
 }

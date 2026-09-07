@@ -35,3 +35,55 @@ final class FloatingPromptFocusTests: XCTestCase {
         XCTAssertFalse(panel.canBecomeKey)
     }
 }
+
+@MainActor
+final class EscapeRoutingTests: XCTestCase {
+    /// Escape must cancel guidance when an ordinary Beacon window is key, but must be
+    /// left to a sheet or dialog while one is up.
+    func testOrdinaryWindowLetsEscapeCancelGuidance() {
+        let window = NSWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 200, height: 200),
+            styleMask: [.titled], backing: .buffered, defer: true
+        )
+
+        XCTAssertTrue(EscapeRouting.handlesEscape(from: window))
+        XCTAssertTrue(EscapeRouting.handlesEscape(from: nil))
+    }
+
+    func testASheetKeepsItsOwnEscape() {
+        let sheet = SheetWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 100, height: 100),
+            styleMask: [.titled], backing: .buffered, defer: true
+        )
+
+        XCTAssertTrue(sheet.isSheet)
+        XCTAssertFalse(
+            EscapeRouting.handlesEscape(from: sheet),
+            "The dialog owns Escape while it is up"
+        )
+    }
+
+    func testAWindowPresentingASheetKeepsEscape() {
+        let host = SheetHostWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 200, height: 200),
+            styleMask: [.titled], backing: .buffered, defer: true
+        )
+        host.presentedSheet = NSWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 100, height: 100),
+            styleMask: [.titled], backing: .buffered, defer: true
+        )
+
+        XCTAssertFalse(EscapeRouting.handlesEscape(from: host))
+    }
+}
+
+/// AppKit attaches a sheet asynchronously, which a unit test cannot rely on, so these
+/// stand in for the two window states the routing rule inspects.
+private final class SheetWindow: NSWindow {
+    override var isSheet: Bool { true }
+}
+
+private final class SheetHostWindow: NSWindow {
+    var presentedSheet: NSWindow?
+    override var attachedSheet: NSWindow? { presentedSheet }
+}

@@ -15,6 +15,13 @@ struct BeaconMenuView: View {
 
             Divider()
 
+            if let confirmation = controller.confirmationMessage {
+                Text(confirmation)
+                Button("Confirm Result") { Task { await controller.confirmResult(succeeded: true) } }
+                Button("That Didn’t Work") { Task { await controller.confirmResult(succeeded: false) } }
+                Divider()
+            }
+
             Toggle("Pause Screen Access", isOn: $controller.screenAccessPaused)
             LabeledContent("Selected Model", value: controller.modelSettings.provider.rawValue)
             Label(

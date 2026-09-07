@@ -102,6 +102,28 @@ final class SettingsStoreTests: XCTestCase {
         }
     }
 
+    func testQueuedAPIKeySavesPreserveEachSubmittedDraft() async throws {
+        try await withAsyncDefaults { defaults in
+            let storage = BlockingAPIKeyStorage()
+            let store = ModelConfigurationStore(defaults: defaults, apiKeyStorage: storage)
+            store.apiKey = "sk-first-value"
+            let firstSave = Task { try await store.saveAPIKey() }
+            defer { storage.releaseFirstWrite() }
+            try await waitUntil { storage.writes == ["sk-first-value"] }
+
+            store.apiKey = "sk-second-value"
+            let secondSave = Task { try await store.saveAPIKey() }
+            await Task.yield()
+            storage.releaseFirstWrite()
+            try await firstSave.value
+            try await secondSave.value
+
+            XCTAssertEqual(storage.writes, ["sk-first-value", "sk-second-value"])
+            XCTAssertEqual(store.apiKey, "sk-second-value")
+            XCTAssertEqual(store.storedAPIKey, "sk-second-value")
+        }
+    }
+
     func testFailedAPIKeyRemovalKeepsInMemoryCredentialState() async {
         await withAsyncDefaults { defaults in
             let storage = InMemoryAPIKeyStorage(value: "sk-test-key")
@@ -149,6 +171,17 @@ final class SettingsStoreTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suiteName) }
         try await body(defaults)
     }
+
+    private func waitUntil(
+        _ condition: () -> Bool,
+        timeout: Duration = .seconds(2)
+    ) async throws {
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        while !condition(), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(condition(), "Timed out waiting for the credential operation")
+    }
 }
 
 private final class InMemoryAPIKeyStorage: APIKeyStorage, @unchecked Sendable {
@@ -177,4 +210,34 @@ private final class InMemoryAPIKeyStorage: APIKeyStorage, @unchecked Sendable {
 
 private enum TestCredentialError: Error, Equatable {
     case deleteFailed
+}
+
+private final class BlockingAPIKeyStorage: APIKeyStorage, @unchecked Sendable {
+    private let lock = NSLock()
+    private let firstWriteGate = DispatchSemaphore(value: 0)
+    private var recordedWrites: [String] = []
+
+    var writes: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedWrites
+    }
+
+    func read() -> String? { nil }
+
+    func write(_ value: String) throws {
+        lock.lock()
+        recordedWrites.append(value)
+        let shouldBlock = recordedWrites.count == 1
+        lock.unlock()
+        if shouldBlock {
+            firstWriteGate.wait()
+        }
+    }
+
+    func delete() throws {}
+
+    func releaseFirstWrite() {
+        firstWriteGate.signal()
+    }
 }

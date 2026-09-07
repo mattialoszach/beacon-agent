@@ -4,6 +4,7 @@ import Combine
 @MainActor
 final class CursorPositionMonitor: ObservableObject {
     @Published private(set) var location: CGPoint
+    private(set) var movementCount: UInt64 = 0
 
     private var globalMonitor: Any?
     private var localMonitor: Any?
@@ -61,8 +62,18 @@ final class CursorPositionMonitor: ObservableObject {
     }
 
     private func updateLocation() {
-        let current = NSEvent.mouseLocation
+        recordMovement(to: NSEvent.mouseLocation)
+    }
+
+    /// Synchronize before presenting new content so an already queued move cannot hide it.
+    func presentationBaseline() -> UInt64 {
+        updateLocation()
+        return movementCount
+    }
+
+    func recordMovement(to current: CGPoint) {
         guard current != location else { return }
+        movementCount += 1
         location = current
     }
 }

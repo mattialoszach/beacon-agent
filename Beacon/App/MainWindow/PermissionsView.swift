@@ -4,6 +4,7 @@ struct PermissionsView: View {
     @EnvironmentObject private var controller: BeaconController
     @Environment(\.scenePhase) private var scenePhase
     @State private var grantedPermissions = Set<PermissionKind>()
+    @State private var requestedPermissions = Set<PermissionKind>()
 
     var body: some View {
         Form {
@@ -19,7 +20,9 @@ struct PermissionsView: View {
                         }
                         Spacer()
                         if !isGranted {
-                            Button("Grant Access") {
+                            Button(requestedPermissions.contains(permission)
+                                   ? "Open System Settings" : "Grant Access") {
+                                requestedPermissions.insert(permission)
                                 controller.requestPermission(permission)
                                 refreshPermissions()
                             }
@@ -30,7 +33,10 @@ struct PermissionsView: View {
             } header: {
                 Text("System permissions")
             } footer: {
-                Text("Beacon only observes after an explicit shortcut or while verifying a visible guide step. It does not continuously record your screen.")
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Beacon only observes after an explicit shortcut or while verifying a visible guide step. It does not continuously record your screen.")
+                    Text("If macOS has already asked once, the button opens Privacy & Security. Enable Beacon there; Screen Recording takes effect after you restart Beacon.")
+                }
             }
         }
         .formStyle(.grouped)
@@ -45,7 +51,6 @@ struct PermissionsView: View {
         switch permission {
         case .accessibility: "Reads labels and positions of visible controls."
         case .screenRecording: "Creates the local privacy preview and visual fallback input."
-        case .microphone: "Reserved for a later voice input feature."
         }
     }
 

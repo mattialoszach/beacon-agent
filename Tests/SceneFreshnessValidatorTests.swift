@@ -70,7 +70,7 @@ final class SceneFreshnessValidatorTests: XCTestCase {
             element(id: "target", label: "Save", x: 0.4, value: "Active", focused: true)
         ] + stableElements + [element(id: "transient", label: "Status")])
 
-        XCTAssertNil(validator.contextIssue(source: source, latest: latest))
+        XCTAssertEqual(validator.contextStatus(source: source, latest: latest), .valid)
         XCTAssertEqual(
             validator.validate(
                 source: source,
@@ -122,21 +122,67 @@ final class SceneFreshnessValidatorTests: XCTestCase {
         XCTAssertEqual(result, .stale(.applicationChanged(expectedApplication: "Fixture")))
     }
 
+    func testSameTitleDifferentWindowsAreNotInterchangeable() {
+        let source = scene(windowID: "first", elements: [])
+        let latest = scene(windowID: "second", elements: [])
+        XCTAssertEqual(
+            validator.contextStatus(source: source, latest: latest),
+            .stale(.windowChanged(expectedWindow: "Document", application: "Fixture"))
+        )
+    }
+
+    func testUnknownWindowIdentityFailsClosed() {
+        let source = scene(windowID: nil, elements: [])
+        XCTAssertEqual(
+            validator.contextStatus(source: source, latest: source),
+            .stale(.windowChanged(expectedWindow: "Document", application: "Fixture"))
+        )
+    }
+
+    func testVisualTargetIsInvalidatedWhenWindowMoves() {
+        let rect = NormalizedRect(x: 0, y: 0, width: 0.5, height: 0.5)
+        let source = scene(bounds: rect, elements: [])
+        let latest = scene(bounds: .init(x: 0.3, y: 0, width: 0.5, height: 0.5), elements: [])
+        XCTAssertEqual(validator.validate(source: source, latest: latest, target: .visualRegion(bounds: rect)),
+                       .stale(.visualContextUnavailable(application: "Fixture")))
+    }
+
+    func testResolutionAndScaleChangesInvalidateSceneEvenWithSameNormalizedBounds() {
+        let bounds = NormalizedRect(x: 0, y: 0, width: 1, height: 1)
+        let original = DisplayDescriptor(id: 1, bounds: bounds, scaleFactor: 2, logicalSize: CGSize(width: 1440, height: 900))
+        for replacement in [
+            DisplayDescriptor(id: 1, bounds: bounds, scaleFactor: 1, logicalSize: original.logicalSize),
+            DisplayDescriptor(id: 1, bounds: bounds, scaleFactor: 2, logicalSize: CGSize(width: 1280, height: 800)),
+            DisplayDescriptor(id: 2, bounds: bounds, scaleFactor: 2, logicalSize: original.logicalSize)
+        ] {
+            XCTAssertEqual(
+                validator.contextStatus(
+                    source: scene(displays: [original], elements: []),
+                    latest: scene(displays: [replacement], elements: [])
+                ),
+                .stale(.displaysChanged)
+            )
+        }
+    }
+
     private func scene(
         application: ApplicationDescriptor = .init(
             name: "Fixture",
             bundleIdentifier: "fixture",
             processIdentifier: 1
         ),
+        windowID: String? = "document",
+        bounds: NormalizedRect? = nil,
+        displays: [DisplayDescriptor] = [],
         elements: [UIElementDescriptor]
     ) -> ScreenScene {
         ScreenScene(
             timestamp: Date(),
             activeApplication: application,
-            activeWindow: .init(title: "Document", bounds: nil),
+            activeWindow: .init(title: "Document", bounds: bounds, id: windowID),
             screenshot: nil,
             elements: elements,
-            displays: []
+            displays: displays
         )
     }
 
@@ -159,6 +205,90 @@ final class SceneFreshnessValidatorTests: XCTestCase {
             enabled: enabled,
             focused: focused,
             bounds: NormalizedRect(x: x, y: 0.1, width: 0.1, height: 0.1)
+        )
+    }
+}
+
+final class TruncatedCaptureFreshnessTests: XCTestCase {
+    private let validator = SceneFreshnessValidator()
+
+    /// The Accessibility walk stops at a time and node budget, so a busy application can
+    /// return far fewer elements for either a changed or unchanged interface. Neither can
+    /// be proved from an incomplete view.
+    func testTruncatedCaptureIsInconclusive() {
+        let source = scene(elementCount: 40, truncated: false)
+        let truncated = scene(elementCount: 8, truncated: true)
+
+        XCTAssertEqual(validator.contextStatus(source: source, latest: truncated), .inconclusive)
+    }
+
+    func testACompleteCaptureWithTheSameShrinkageIsStillStale() {
+        let source = scene(elementCount: 40, truncated: false)
+        let complete = scene(elementCount: 8, truncated: false)
+
+        XCTAssertEqual(
+            validator.contextStatus(source: source, latest: complete),
+            .stale(.interfaceChanged(application: "App"))
+        )
+    }
+
+    func testTruncationValidatesASurvivingStableAccessibilityTarget() {
+        let source = scene(elementCount: 40, truncated: false)
+        let truncated = scene(elementCount: 8, truncated: true)
+        let target = GroundedTarget.accessibilityElement(
+            elementId: "e_3", bounds: .init(x: 0.1, y: 0.1, width: 0.05, height: 0.02)
+        )
+
+        XCTAssertEqual(
+            validator.validate(source: source, latest: truncated, target: target),
+            .valid(target: target)
+        )
+    }
+
+    func testTruncationRemainsInconclusiveForAVisualTarget() {
+        let source = scene(elementCount: 40, truncated: false)
+        let truncated = scene(elementCount: 8, truncated: true)
+
+        XCTAssertEqual(
+            validator.validate(
+                source: source,
+                latest: truncated,
+                target: .visualRegion(bounds: .init(x: 0.1, y: 0.1, width: 0.05, height: 0.02))
+            ),
+            .inconclusive
+        )
+    }
+
+    func testTruncationDoesNotHideAMissingTarget() {
+        let source = scene(elementCount: 40, truncated: false)
+        let truncated = scene(elementCount: 8, truncated: true)
+        let target = GroundedTarget.accessibilityElement(
+            elementId: "e_30", bounds: .init(x: 0.1, y: 0.1, width: 0.05, height: 0.02)
+        )
+
+        guard case let .stale(issue) = validator.validate(
+            source: source, latest: truncated, target: target
+        ) else {
+            return XCTFail("A target missing from the latest capture must still be stale")
+        }
+        XCTAssertEqual(issue, .targetUnavailable(label: "Control 30", application: "App"))
+    }
+
+    private func scene(elementCount: Int, truncated: Bool) -> ScreenScene {
+        ScreenScene(
+            timestamp: Date(),
+            activeApplication: .init(name: "App", bundleIdentifier: "com.example.app", processIdentifier: 5),
+            activeWindow: .init(title: "Main", bounds: nil, id: "w1"),
+            screenshot: nil,
+            elements: (0..<elementCount).map { index in
+                UIElementDescriptor(
+                    id: "e_\(index)", role: "AXButton", subrole: nil, label: "Control \(index)",
+                    title: nil, value: nil, enabled: true, focused: false,
+                    bounds: .init(x: 0.1, y: 0.1, width: 0.05, height: 0.02), windowID: "w1"
+                )
+            },
+            displays: [],
+            isTruncated: truncated
         )
     }
 }
