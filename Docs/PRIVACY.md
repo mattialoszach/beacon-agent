@@ -6,7 +6,7 @@ Beacon requests only the permissions used by its current features: Accessibility
 
 ## Capture rules
 
-- Capture starts only after Option + Space, a visible menu action, or an explicit Developer Inspector refresh.
+- Capture starts only after Option + Space, a visible Ask/Keep Guiding action, or an explicit Developer Inspector refresh.
 - Screen Recording is optional for the default grounder.
 - Applications in the exclusion list never produce screenshots and are forced onto the local deterministic provider.
 - Notification Center is always excluded from capture. Banners are drawn by that process rather than by the application that posted them, so an excluded application's alert would otherwise appear in a capture.

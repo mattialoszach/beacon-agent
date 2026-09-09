@@ -14,6 +14,9 @@ final class FloatingPromptLayoutTests: XCTestCase {
         status.updateThinking(message: "Updated message", cursorMovementBaseline: 12)
         XCTAssertFalse(status.allowsCursorFade(after: 12))
         XCTAssertTrue(status.allowsCursorFade(after: 13))
+
+        status.showStatus(mode: .completion, message: "Finished", cursorMovementBaseline: 20)
+        XCTAssertFalse(status.allowsCursorFade(after: 21), "The interactive completion card never fades")
     }
 
     func testPromptKeepsOriginalPaddingWithACompactNaturalHeight() {
@@ -44,5 +47,7 @@ final class FloatingPromptLayoutTests: XCTestCase {
 
         XCTAssertTrue(canvas.contains(FloatingPromptLayout.surfaceFrame(isThinking: false)))
         XCTAssertTrue(canvas.contains(FloatingPromptLayout.surfaceFrame(isThinking: true)))
+        XCTAssertLessThanOrEqual(FloatingPromptLayout.completionSize.width, canvas.width)
+        XCTAssertLessThanOrEqual(FloatingPromptLayout.completionSize.height, canvas.height)
     }
 }

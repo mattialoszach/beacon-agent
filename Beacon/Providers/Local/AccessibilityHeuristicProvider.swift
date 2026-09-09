@@ -13,7 +13,8 @@ struct AccessibilityHeuristicProvider: InstructorModel {
             )
         }
 
-        if let planned = ApplicationGuidePlanner().response(for: request) {
+        if !request.continuationRequested,
+           let planned = ApplicationGuidePlanner().response(for: request) {
             return planned
         }
 

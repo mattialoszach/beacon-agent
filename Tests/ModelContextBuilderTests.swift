@@ -287,6 +287,20 @@ final class ModelContextBuilderTests: XCTestCase {
         }
     }
 
+    func testExplicitContinuationIsVisibleInTheBoundedModelContext() {
+        var request = InstructorRequest(
+            question: "Finish setting this up",
+            scene: scene(elements: []),
+            mode: .guide
+        )
+        request.continuationRequested = true
+
+        let context = ModelContextBuilder(maximumCharacters: 600).build(for: request)
+
+        XCTAssertTrue(context.text.contains("Continuation requested"))
+        XCTAssertLessThanOrEqual(context.userPrompt.count, 600)
+    }
+
     private func element(id: String, label: String) -> UIElementDescriptor {
         UIElementDescriptor(
             id: id, role: "AXButton", subrole: nil, label: label, title: nil,

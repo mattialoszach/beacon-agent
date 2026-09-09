@@ -27,6 +27,7 @@ enum InstructorEvent: Equatable, Sendable {
     case confirmationRequested
     case resultConfirmed
     case verificationFinished(success: Bool, hasNextStep: Bool)
+    case continuationRequested
     case cancel
     case fail
 }
@@ -66,6 +67,7 @@ struct InstructorStateMachine: Equatable, Sendable {
         case (.awaitingConfirmation, .resultConfirmed): state = .verifying
         case let (.verifying, .verificationFinished(success, hasNextStep)):
             state = success ? (hasNextStep ? .capturingScene : .completed) : .presenting
+        case (.completed, .continuationRequested): state = .capturingScene
         default: throw StateTransitionError.invalid(state: state, event: event)
         }
         return state

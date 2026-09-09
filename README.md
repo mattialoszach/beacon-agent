@@ -26,6 +26,7 @@ This repository contains the native v0.1 grounding prototype and verified multi-
 - Bounded model contexts with native structured Apple Foundation Models output
 - Verified multi-step guides with an eight-step safety limit
 - Continuous navigation guidance for menus, settings, and account/profile flows: a newly opened screen is replanned into the next arrow instead of being mistaken for completion
+- Model-declared or locally verified final goals end with a green completion card; **Keep Guiding** requests one more bounded reasoning pass with the same step history, while the eight-step automatic safety limit remains enforced
 - Specific control/value/window outcome checks, with explicit confirmation when success cannot be established locally
 - Window identity and display-change invalidation to prevent stale guidance
 - Fixture-tested recipes for TextEdit, Preview, Finder, Safari, and System Settings, including Appearance → Dark; real-app acceptance testing remains required

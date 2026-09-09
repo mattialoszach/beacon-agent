@@ -15,8 +15,20 @@ struct BeaconMenuView: View {
 
             Divider()
 
+            if let completion = controller.completionMessage {
+                Label("Finished", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                BeaconFormattedText(completion)
+                if controller.canContinueCompletedGuide {
+                    Button("Keep Guiding", systemImage: "arrow.clockwise") {
+                        Task { await controller.continueGuiding() }
+                    }
+                }
+                Divider()
+            }
+
             if let confirmation = controller.confirmationMessage {
-                Text(confirmation)
+                BeaconFormattedText(confirmation)
                 Button("Confirm Result") { Task { await controller.confirmResult(succeeded: true) } }
                 Button("That Didn’t Work") { Task { await controller.confirmResult(succeeded: false) } }
                 Divider()

@@ -35,6 +35,8 @@ struct AppleFoundationModelProvider: InstructorModel {
         successful verification of this proposed action will finish the user's overall goal. Controls that open
         a menu, account panel, settings page, sidebar section, or profile editor are navigation steps, not final
         steps; keep guiding after the interface changes.
+        When the prompt says Continuation requested, re-check the goal and choose another useful visible step if
+        one remains. It is still valid to choose complete again when the current scene proves there is no more to do.
         Set expectedApplicationScope to mayChange only when this step should open or activate another app;
         otherwise use sameApplication.
         Describe the exact expected control label and role for automatic verification, and its expected

@@ -86,16 +86,30 @@ final class FloatingPromptController {
         showStatus(mode: .answer, message: message, onCancel: onCancel)
     }
 
+    func showCompletion(
+        message: String,
+        onContinue: (() -> Void)?,
+        onCancel: @escaping () -> Void
+    ) {
+        showStatus(
+            mode: .completion,
+            message: message,
+            onContinue: onContinue,
+            onCancel: onCancel
+        )
+    }
+
     private func showStatus(
         mode: FloatingPromptPresentation.Mode,
         message: String,
+        onContinue: (() -> Void)? = nil,
         onCancel: @escaping () -> Void
     ) {
         guard isEnabled else { return }
         if let presentation {
-            presentation.showStatus(mode: mode, message: message,
+            presentation.showStatus(mode: mode, message: message, onContinue: onContinue,
                                     cursorMovementBaseline: cursorPositionMonitor.presentationBaseline())
-            if let panel { configureForStatus(panel) }
+            if let panel { configureForStatus(panel, mode: mode) }
             return
         }
 
@@ -106,6 +120,7 @@ final class FloatingPromptController {
             message: message,
             cursorMovementBaseline: cursorPositionMonitor.presentationBaseline(),
             onSubmit: { _ in },
+            onContinue: onContinue,
             onCancel: { [weak self] in
                 self?.close()
                 onCancel()
@@ -118,7 +133,7 @@ final class FloatingPromptController {
         ))
         self.panel = panel
         self.presentation = presentation
-        configureForStatus(panel)
+        configureForStatus(panel, mode: mode)
     }
 
     func updateThinking(message: String) {
@@ -187,9 +202,9 @@ final class FloatingPromptController {
         }
     }
 
-    private func configureForStatus(_ panel: PromptPanel) {
+    private func configureForStatus(_ panel: PromptPanel, mode: FloatingPromptPresentation.Mode) {
         panel.acceptsKeyEvents = false
-        panel.ignoresMouseEvents = true
+        panel.ignoresMouseEvents = mode != .completion
         if panel.isKeyWindow { panel.resignKey() }
         panel.orderFrontRegardless()
         installStatusEscapeMonitors()
@@ -264,6 +279,7 @@ struct FloatingPromptLayout {
     static let panelSize = CGSize(width: 440, height: 176)
     static let promptSize = CGSize(width: 408, height: 114)
     static let thinkingSize = CGSize(width: 380, height: 110)
+    static let completionSize = CGSize(width: 408, height: 132)
     static let outerPadding: CGFloat = 16
     static let inputPadding: CGFloat = 12
     static let maximumQuestionLines = 3
@@ -289,6 +305,7 @@ final class FloatingPromptPresentation: ObservableObject {
         case thinking
         case waiting
         case answer
+        case completion
 
         var isStatus: Bool { self != .prompt }
     }
@@ -298,6 +315,7 @@ final class FloatingPromptPresentation: ObservableObject {
     @Published private(set) var cursorMovementBaseline: UInt64
 
     let onSubmit: (String) -> Void
+    private(set) var onContinue: (() -> Void)?
     let onCancel: () -> Void
 
     init(
@@ -305,19 +323,27 @@ final class FloatingPromptPresentation: ObservableObject {
         message: String = "",
         cursorMovementBaseline: UInt64 = 0,
         onSubmit: @escaping (String) -> Void,
+        onContinue: (() -> Void)? = nil,
         onCancel: @escaping () -> Void
     ) {
         self.mode = mode
         self.message = message
         self.cursorMovementBaseline = cursorMovementBaseline
         self.onSubmit = onSubmit
+        self.onContinue = onContinue
         self.onCancel = onCancel
     }
 
-    func showStatus(mode: Mode, message: String, cursorMovementBaseline: UInt64) {
+    func showStatus(
+        mode: Mode,
+        message: String,
+        onContinue: (() -> Void)? = nil,
+        cursorMovementBaseline: UInt64
+    ) {
         precondition(mode.isStatus)
         self.cursorMovementBaseline = cursorMovementBaseline
         self.message = message
+        self.onContinue = onContinue
         self.mode = mode
     }
 
@@ -328,7 +354,7 @@ final class FloatingPromptPresentation: ObservableObject {
     }
 
     func allowsCursorFade(after movementCount: UInt64) -> Bool {
-        mode.isStatus && movementCount > cursorMovementBaseline
+        mode.isStatus && mode != .completion && movementCount > cursorMovementBaseline
     }
 }
 
@@ -356,7 +382,12 @@ private struct FloatingPromptView: View {
     var body: some View {
         ZStack {
             if isThinking {
-                TeacherStatusView(mode: presentation.mode, message: presentation.message)
+                TeacherStatusView(
+                    mode: presentation.mode,
+                    message: presentation.message,
+                    onContinue: presentation.onContinue,
+                    onCancel: presentation.onCancel
+                )
                     .transition(.opacity.combined(with: .scale(scale: 0.96)))
             } else {
                 promptContents
@@ -478,8 +509,19 @@ private struct FloatingPromptView: View {
 private struct TeacherStatusView: View {
     let mode: FloatingPromptPresentation.Mode
     let message: String
+    let onContinue: (() -> Void)?
+    let onCancel: () -> Void
 
+    @ViewBuilder
     var body: some View {
+        if mode == .completion {
+            completionContents
+        } else {
+            statusContents
+        }
+    }
+
+    private var statusContents: some View {
         HStack(spacing: 13) {
             statusIcon
                 .frame(width: 54, height: 54)
@@ -506,9 +548,47 @@ private struct TeacherStatusView: View {
         .accessibilityHint(mode == .answer ? "Press Escape to dismiss" : "Press Escape to cancel")
     }
 
+    private var completionContents: some View {
+        HStack(spacing: 13) {
+            Image(systemName: "checkmark")
+                .font(.system(size: 22, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 46, height: 46)
+                .background(.green.gradient, in: Circle())
+                .shadow(color: .green.opacity(0.24), radius: 8, y: 4)
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Finished")
+                    .font(.system(size: 14, weight: .semibold))
+                BeaconFormattedText(message)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                HStack(spacing: 8) {
+                    if let onContinue {
+                        Button("Keep guiding", systemImage: "arrow.clockwise", action: onContinue)
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                    }
+                    Button("Dismiss", action: onCancel)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .frame(
+            width: FloatingPromptLayout.completionSize.width,
+            height: FloatingPromptLayout.completionSize.height
+        )
+        .accessibilityElement(children: .contain)
+    }
+
     private var title: String {
         switch mode {
         case .answer: "Beacon"
+        case .completion: "Finished"
         case .waiting: "Your turn"
         case .prompt, .thinking: "Beacon is checking"
         }
@@ -517,6 +597,7 @@ private struct TeacherStatusView: View {
     private var footer: String {
         switch mode {
         case .answer: "Full answer in Beacon  ·  Esc to dismiss"
+        case .completion: "Esc to dismiss"
         case .waiting: "I’ll continue automatically  ·  Esc to stop"
         case .prompt, .thinking: "Please wait  ·  Esc to cancel"
         }
@@ -524,7 +605,7 @@ private struct TeacherStatusView: View {
 
     @ViewBuilder
     private var statusIcon: some View {
-        if mode == .waiting || mode == .answer {
+        if mode == .waiting || mode == .answer || mode == .completion {
             Image(systemName: mode == .answer ? "text.bubble" : "arrow.counterclockwise")
                 .font(.system(size: 21, weight: .semibold))
                 .foregroundStyle(.white)

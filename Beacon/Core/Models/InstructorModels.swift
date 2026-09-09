@@ -162,6 +162,9 @@ struct InstructorRequest: Codable, Equatable, Sendable {
     var guideContext: GuideContext? = nil
     var setOfMarks: [SetOfMark] = []
     var visualContextImage: ScreenSnapshot? = nil
+    /// The user explicitly asked Beacon to take another reasoning pass after a model
+    /// completion. Providers may still return complete when no useful step remains.
+    var continuationRequested = false
 }
 
 struct CompletedGuideStep: Codable, Equatable, Sendable {

@@ -47,6 +47,7 @@ final class BeaconController: ObservableObject {
     @Published private(set) var history: [GuideHistoryItem] = []
     @Published private(set) var errorMessage: String?
     @Published private(set) var confirmationMessage: String?
+    @Published private(set) var completionMessage: String?
     @Published private(set) var statusMessage = "Ready — press Option + Space"
     @Published var screenAccessPaused = false {
         didSet {
@@ -118,6 +119,12 @@ final class BeaconController: ObservableObject {
             .capturingScene, .understanding, .grounding, .awaitingContextRestore,
             .waitingForChange, .verifying
         ].contains(state) || (state == .awaitingConfirmation && observationID != nil)
+    }
+
+    var canContinueCompletedGuide: Bool {
+        state == .completed
+            && completionMessage != nil
+            && activeGuide.map { $0.completedSteps.count < $0.maximumSteps } == true
     }
 
     init(
@@ -295,6 +302,7 @@ final class BeaconController: ObservableObject {
         currentQuestion = question
         currentMode = mode
         errorMessage = nil
+        completionMessage = nil
         outboundImagePreview = nil
         activeGuide = mode == .guide ? ActiveGuide(question: question) : nil
         do {
@@ -400,6 +408,7 @@ final class BeaconController: ObservableObject {
         operationID = UUID()
         confirmationMessage = nil
         confirmationBaseline = nil
+        completionMessage = nil
         noChangeRetries = 0
         unexpectedChangeRetries = 0
         contextReplans = 0
@@ -477,6 +486,48 @@ final class BeaconController: ObservableObject {
         }
     }
 
+    func continueGuiding() async {
+        guard canContinueCompletedGuide else { return }
+        let identifier = operationID
+        let requestIdentifier = UUID()
+        requestTask?.cancel()
+        requestID = requestIdentifier
+        let task = Task { [weak self] in
+            await InstructorOperation.$id.withValue(identifier) {
+                guard let self else { return }
+                await self.continueCompletedGuideActive()
+            }
+        }
+        requestTask = task
+        await task.value
+        if requestID == requestIdentifier {
+            requestTask = nil
+            requestID = nil
+        }
+    }
+
+    private func continueCompletedGuideActive() async {
+        guard canContinueCompletedGuide, var guide = activeGuide else { return }
+        do {
+            completionMessage = nil
+            guide.continuationRequested = true
+            activeGuide = guide
+            currentResponse = nil
+            selectedTarget = nil
+            beginProcessingActivity()
+            statusMessage = "Taking another look…"
+            prompt.showThinking(message: statusMessage) { [weak self] in self?.cancel() }
+            try transition(.continuationRequested)
+            let scene = try await captureTargetScene()
+            try checkActiveOperation()
+            await continueRequest(from: scene, question: guide.question, mode: .guide)
+        } catch is CancellationError {
+            return
+        } catch {
+            fail(with: error)
+        }
+    }
+
     private func continueAfterConfirmation(baseline: ScreenScene) async {
         do {
             try transition(.resultConfirmed)
@@ -503,10 +554,10 @@ final class BeaconController: ObservableObject {
                 await continueGuide(from: latest)
             } else {
                 try transition(.verificationFinished(success: true, hasNextStep: false))
-                statusMessage = completionStatusMessage(confirmedByUser: true)
-                activeGuide = nil
-                prompt.close()
-                endProcessingActivity()
+                presentGuideCompletion(
+                    message: "The requested result was confirmed.",
+                    confirmedByUser: true
+                )
             }
         } catch is CancellationError {
             return
@@ -609,6 +660,10 @@ final class BeaconController: ObservableObject {
         resetRecoveryAttempts()
         var request = InstructorRequest(question: question, scene: scene, mode: mode)
         request.guideContext = activeGuide?.context
+        if activeGuide?.continuationRequested == true {
+            request.continuationRequested = true
+            activeGuide?.continuationRequested = false
+        }
         request.setOfMarks = setOfMarksBuilder.build(scene: scene, query: question)
         currentSetOfMarks = request.setOfMarks
         let step = activeGuide.map { " step \($0.completedSteps.count + 1)" } ?? ""
@@ -617,6 +672,7 @@ final class BeaconController: ObservableObject {
         var reasoningModel: (any InstructorModel)?
         var usedLocalFallback = false
         if mode == .guide,
+           !request.continuationRequested,
            let planned = ApplicationGuidePlanner(registry: guidePolicyRegistry).response(for: request) {
             outboundImagePreview = nil
             let modelContext = ModelContextBuilder().build(for: request)
@@ -792,13 +848,12 @@ final class BeaconController: ObservableObject {
         }
 
         let expectsChange = response.expectedOutcome != nil && response.action?.type == .pointToElement
-        // An informational answer has no task to confirm; only a guide's completion claim
-        // needs the user to check the result.
+        // Explicit model completion is terminal. Confirmation remains for a proposed
+        // action whose outcome cannot be verified safely from local scene evidence.
         let claimsCompletion = response.taskComplete == true || response.action?.type == .complete
         let needsConfirmation = (expectsChange
             && response.expectedOutcome?.canVerifyAutomatically != true
             && !automaticallyFollowsCurrentStep)
-            || (mode == .guide && !usedRecipe && claimsCompletion)
         if needsConfirmation {
             try transition(.confirmationRequested)
             confirmationBaseline = presentationScene.replacingScreenshot(with: nil).replacingVisualElements(with: [])
@@ -821,13 +876,15 @@ final class BeaconController: ObservableObject {
             question: question,
             response: response,
             scene: presentationScene,
-            succeeded: state == .completed ? (mode == .ask || usedRecipe && response.taskComplete == true) : nil
+            succeeded: state == .completed ? (mode == .ask || claimsCompletion) : nil
         )
         if state == .waitingForChange {
             statusMessage = automaticallyFollowsCurrentStep
                 ? "Click the highlighted control — following the next screen automatically…"
                 : "Watching for the expected change…"
             beginObservation(from: presentationScene)
+        } else if mode == .guide, claimsCompletion {
+            presentGuideCompletion(message: response.message)
         } else {
             statusMessage = response.taskComplete == true ? "Task completed" : "Answered"
             if response.action?.type != .pointToElement {
@@ -1107,14 +1164,41 @@ final class BeaconController: ObservableObject {
         if hasNextStep {
             await continueGuide(from: latest)
         } else {
-            prompt.close()
-            statusMessage = completionStatusMessage(
+            presentGuideCompletion(
+                message: "Beacon verified the requested result.",
                 forcedBySafetyLimit: forceContinue
                     && activeGuide?.completedSteps.count == activeGuide?.maximumSteps
             )
-            activeGuide = nil
-            endProcessingActivity()
         }
+    }
+
+    private func presentGuideCompletion(
+        message: String,
+        confirmedByUser: Bool = false,
+        forcedBySafetyLimit: Bool = false
+    ) {
+        overlay.dismiss()
+        statusMessage = completionStatusMessage(
+            confirmedByUser: confirmedByUser,
+            forcedBySafetyLimit: forcedBySafetyLimit
+        )
+        if reachedGuideSafetyLimit(forcedBySafetyLimit: forcedBySafetyLimit) {
+            completionMessage = nil
+            activeGuide = nil
+            prompt.showAnswer(
+                message: "\(statusMessage). Start a new request if you want to continue."
+            ) { [weak self] in self?.cancel() }
+        } else {
+            completionMessage = message
+            prompt.showCompletion(
+                message: message,
+                onContinue: canContinueCompletedGuide
+                    ? { [weak self] in Task { await self?.continueGuiding() } }
+                    : nil,
+                onCancel: { [weak self] in self?.cancel() }
+            )
+        }
+        endProcessingActivity()
     }
 
     /// A guide that finished its task on the eighth step is complete, not paused at the
@@ -1123,18 +1207,21 @@ final class BeaconController: ObservableObject {
         confirmedByUser: Bool = false,
         forcedBySafetyLimit: Bool = false
     ) -> String {
-        let reachedLimit = activeGuide.map { $0.completedSteps.count == $0.maximumSteps } == true
-            && (forcedBySafetyLimit || (
-                currentResponse?.taskComplete != true
-                    && currentResponse?.completesTaskAfterSuccess != true
-                    && currentResponse?.action?.type != .complete
-            ))
-        if reachedLimit {
+        if reachedGuideSafetyLimit(forcedBySafetyLimit: forcedBySafetyLimit) {
             return confirmedByUser
                 ? "Step confirmed; paused at the 8-step safety limit"
                 : "Task paused at the 8-step safety limit"
         }
         return confirmedByUser ? "Result confirmed by you" : "Task completed"
+    }
+
+    private func reachedGuideSafetyLimit(forcedBySafetyLimit: Bool) -> Bool {
+        activeGuide.map { $0.completedSteps.count == $0.maximumSteps } == true
+            && (forcedBySafetyLimit || (
+                currentResponse?.taskComplete != true
+                    && currentResponse?.completesTaskAfterSuccess != true
+                    && currentResponse?.action?.type != .complete
+            ))
     }
 
     private func beginContextRecovery(
@@ -1516,10 +1603,9 @@ final class BeaconController: ObservableObject {
                     if hasNextStep {
                         await self.continueGuide(from: newScene)
                     } else {
-                        self.prompt.close()
-                        self.statusMessage = self.completionStatusMessage()
-                        self.activeGuide = nil
-                        self.endProcessingActivity()
+                        self.presentGuideCompletion(
+                            message: "Beacon verified the requested result."
+                        )
                     }
                     return
                 } catch {
@@ -1648,6 +1734,7 @@ final class BeaconController: ObservableObject {
     private func stopGuideAfterRecovery(message: String) {
         confirmationMessage = nil
         confirmationBaseline = nil
+        completionMessage = nil
         accessibilityChangeObserver.stop()
         observationTask?.cancel()
         observationTask = nil
@@ -1770,6 +1857,7 @@ final class BeaconController: ObservableObject {
         activeGuide = nil
         confirmationMessage = nil
         confirmationBaseline = nil
+        completionMessage = nil
         pendingHistoryItemID = nil
         frameComparisonSamples.removeAll()
         try? transition(.fail)
@@ -2054,6 +2142,7 @@ private struct ActiveGuide {
     let question: String
     let maximumSteps = 8
     var completedSteps: [CompletedGuideStep] = []
+    var continuationRequested = false
 
     var context: GuideContext {
         GuideContext(

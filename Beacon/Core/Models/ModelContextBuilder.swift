@@ -156,6 +156,9 @@ struct ModelContextBuilder: Sendable {
                     + " [" + sanitized(step.targetLabel ?? "no target", limit: min(80, fieldBudget)) + "]"
             }
         }
+        if request.continuationRequested {
+            header += "\nContinuation requested: Re-check the goal and provide another useful step if one remains. Otherwise complete again."
+        }
         return String(header.prefix(budget))
     }
 

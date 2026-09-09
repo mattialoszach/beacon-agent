@@ -158,8 +158,22 @@ private struct HomeView: View {
                             Text(controller.currentQuestion ?? "")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                            BeaconFormattedText(response.message)
-                                .font(.title3.weight(.semibold))
+                            if let completion = controller.completionMessage {
+                                Label("Finished", systemImage: "checkmark.circle.fill")
+                                    .font(.title3.weight(.semibold))
+                                    .foregroundStyle(.green)
+                                BeaconFormattedText(completion)
+                                    .font(.body)
+                                if controller.canContinueCompletedGuide {
+                                    Button("Keep Guiding", systemImage: "arrow.clockwise") {
+                                        Task { await controller.continueGuiding() }
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                }
+                            } else {
+                                BeaconFormattedText(response.message)
+                                    .font(.title3.weight(.semibold))
+                            }
                             if let confirmation = controller.confirmationMessage {
                                 BeaconFormattedText("Check the result: \(confirmation)")
                                 Text("Beacon needs your confirmation before continuing.")

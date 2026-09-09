@@ -643,25 +643,56 @@ final class BeaconControllerLifecycleTests: XCTestCase {
         controller.cancel()
     }
 
-    func testModelCompletionNeedsUserConfirmation() async {
+    func testModelCompletionFinishesWithAnOptionalContinuation() async {
         let response = InstructorResponse(message: "All done", action: nil, expectedOutcome: nil, taskComplete: true)
         let controller = makeController(model: FixedModel(response: response))
         await controller.run(question: "Finish", mode: .guide, initialScene: fixture())
-        XCTAssertEqual(controller.state, .awaitingConfirmation)
-        XCTAssertNil(controller.history.first?.succeeded)
-        XCTAssertNotNil(controller.confirmationMessage)
-        await controller.confirmResult(succeeded: true)
         XCTAssertEqual(controller.state, .completed)
         XCTAssertEqual(controller.history.first?.succeeded, true)
         XCTAssertNil(controller.confirmationMessage)
+        XCTAssertEqual(controller.completionMessage, "All done")
+        XCTAssertTrue(controller.canContinueCompletedGuide)
         controller.cancel()
     }
 
-    func testDecliningOrCancellingConfirmationNeverCompletesTheTask() async {
+    func testCompletedGuideCanTakeOneMoreReasoningPass() async {
+        let scene = largeInspectorScene(targetLabel: "Advanced")
+        let model = CompletionThenContinuationModel()
+        let controller = makeController(model: model, captureScene: { scene })
+
+        await controller.run(question: "Finish setup", mode: .guide, initialScene: scene)
+        XCTAssertEqual(controller.state, .completed)
+
+        await controller.continueGuiding()
+
+        XCTAssertEqual(model.requests.count, 2)
+        XCTAssertTrue(model.requests[1].continuationRequested)
+        XCTAssertEqual(model.requests[1].guideContext?.completedSteps, [])
+        XCTAssertEqual(controller.currentResponse?.message, "Open Advanced.")
+        XCTAssertEqual(controller.state, .waitingForChange)
+        XCTAssertNil(controller.completionMessage)
+        controller.cancel()
+    }
+
+    func testDecliningOrCancellingAmbiguousFinalActionNeverCompletesTheTask() async {
+        let scene = largeInspectorScene(targetLabel: "Finish")
         for cancel in [false, true] {
             let controller = makeController(model: FixedModel(response: .init(
-                message: "All done", action: nil, expectedOutcome: nil, taskComplete: true)))
-            await controller.run(question: "Finish", mode: .guide, initialScene: fixture())
+                message: "Choose Finish.",
+                action: .init(
+                    type: .pointToElement,
+                    targetElementId: "element-069",
+                    targetBounds: nil,
+                    overlay: .spotlight
+                ),
+                expectedOutcome: .init(
+                    type: .visualChange,
+                    description: "Check the requested result"
+                ),
+                taskComplete: false,
+                completesTaskAfterSuccess: true
+            )), captureScene: { scene })
+            await controller.run(question: "Finish", mode: .guide, initialScene: scene)
             if cancel { controller.cancel() } else { await controller.confirmResult(succeeded: false) }
             await controller.confirmResult(succeeded: true)
             XCTAssertEqual(controller.state, cancel ? .idle : .failed)
@@ -671,21 +702,37 @@ final class BeaconControllerLifecycleTests: XCTestCase {
     }
 
     func testACompletedRequestDoesNotResolveAnOlderCancelledHistoryRow() async {
-        let response = InstructorResponse(
-            message: "All done",
-            action: nil,
-            expectedOutcome: nil,
-            taskComplete: true
-        )
-        let controller = makeController(model: FixedModel(response: response))
+        let scene = largeInspectorScene(targetLabel: "Finish")
+        let model = SequencedModel(responses: [
+            InstructorResponse(
+                message: "Choose Finish.",
+                action: .init(
+                    type: .pointToElement,
+                    targetElementId: "element-069",
+                    targetBounds: nil,
+                    overlay: .spotlight
+                ),
+                expectedOutcome: .init(
+                    type: .visualChange,
+                    description: "Check the requested result"
+                ),
+                taskComplete: false
+            ),
+            InstructorResponse(
+                message: "All done",
+                action: nil,
+                expectedOutcome: nil,
+                taskComplete: true
+            )
+        ])
+        let controller = makeController(model: model, captureScene: { scene })
 
-        await controller.run(question: "First task", mode: .guide, initialScene: fixture())
+        await controller.run(question: "First task", mode: .guide, initialScene: scene)
         let cancelledRowID = controller.history[0].id
         controller.cancel()
 
-        await controller.run(question: "Second task", mode: .guide, initialScene: fixture())
+        await controller.run(question: "Second task", mode: .guide, initialScene: scene)
         let completedRowID = controller.history[0].id
-        await controller.confirmResult(succeeded: true)
 
         XCTAssertEqual(controller.history.count, 2)
         XCTAssertEqual(controller.history[0].id, completedRowID)
@@ -783,6 +830,8 @@ final class BeaconControllerLifecycleTests: XCTestCase {
         XCTAssertEqual(model.requests.count, 8)
         XCTAssertEqual(model.requests.last?.guideContext?.completedSteps.count, 7)
         XCTAssertTrue(controller.statusMessage.contains("8-step safety limit"))
+        XCTAssertNil(controller.completionMessage)
+        XCTAssertFalse(controller.canContinueCompletedGuide)
         XCTAssertTrue(controller.history.allSatisfy { $0.succeeded == true })
         controller.cancel()
     }
@@ -1128,6 +1177,53 @@ private struct FixedModel: InstructorModel {
     }
 
     func reason(request: InstructorRequest) async throws -> InstructorResponse { response }
+}
+
+private final class CompletionThenContinuationModel: InstructorModel {
+    let id = "Fixture completion continuation"
+    let capabilities: ModelCapabilities = [.local, .text]
+    var requests: [InstructorRequest] = []
+
+    func reason(request: InstructorRequest) async throws -> InstructorResponse {
+        requests.append(request)
+        if !request.continuationRequested {
+            return InstructorResponse(
+                message: "All done",
+                action: nil,
+                expectedOutcome: nil,
+                taskComplete: true
+            )
+        }
+        return InstructorResponse(
+            message: "Open Advanced.",
+            action: .init(
+                type: .pointToElement,
+                targetElementId: "element-069",
+                targetBounds: nil,
+                overlay: .spotlight
+            ),
+            expectedOutcome: .init(
+                type: .elementAppears,
+                description: "The next setup control should appear.",
+                element: .init(labels: ["Next"], role: "AXButton")
+            ),
+            taskComplete: false
+        )
+    }
+}
+
+private final class SequencedModel: InstructorModel {
+    let id = "Fixture sequence"
+    let capabilities: ModelCapabilities = [.local, .text]
+    private var responses: [InstructorResponse]
+
+    init(responses: [InstructorResponse]) {
+        self.responses = responses
+    }
+
+    func reason(request: InstructorRequest) async throws -> InstructorResponse {
+        responses.removeFirst()
+    }
 }
 
 private final class CountingGuideModel: InstructorModel {

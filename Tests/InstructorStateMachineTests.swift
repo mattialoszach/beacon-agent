@@ -61,6 +61,16 @@ final class InstructorStateMachineTests: XCTestCase {
         XCTAssertEqual(try machine.handle(.contextLost), .awaitingContextRestore)
         XCTAssertEqual(try machine.handle(.contextRestored), .capturingScene)
     }
+
+    func testCompletedGuideCanStartAnExplicitContinuationPass() throws {
+        var machine = InstructorStateMachine()
+        _ = try machine.handle(.questionReceived)
+        _ = try machine.handle(.sceneCaptured)
+        _ = try machine.handle(.responseGenerated(needsTarget: false))
+        _ = try machine.handle(.instructionPresented(expectsChange: false))
+
+        XCTAssertEqual(try machine.handle(.continuationRequested), .capturingScene)
+    }
 }
 
 /// AGENTS.md requires every transition to be explicit and tested. This table pins the
@@ -78,6 +88,7 @@ final class InstructorStateMachineTableTests: XCTestCase {
         .contextRestored, .contextChanged, .instructionPresented(expectsChange: true),
         .instructionPresented(expectsChange: false), .meaningfulChangeDetected,
         .confirmationRequested, .resultConfirmed,
+        .continuationRequested,
         .verificationFinished(success: true, hasNextStep: true),
         .verificationFinished(success: true, hasNextStep: false),
         .verificationFinished(success: false, hasNextStep: false)
@@ -115,7 +126,7 @@ final class InstructorStateMachineTableTests: XCTestCase {
             (.verificationFinished(success: true, hasNextStep: false), .completed),
             (.verificationFinished(success: false, hasNextStep: false), .presenting)
         ],
-        .completed: [],
+        .completed: [(.continuationRequested, .capturingScene)],
         .failed: []
     ]
 
