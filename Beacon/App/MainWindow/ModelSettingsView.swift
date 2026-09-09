@@ -131,9 +131,9 @@ struct ModelSettingsView: View {
     private var providerDescription: String {
         switch controller.modelSettings.provider {
         case .accessibility:
-            "Fast, deterministic matching that runs entirely on your Mac. This is the default."
+            "Fast, deterministic matching that runs entirely on your Mac."
         case .apple:
-            "On-device language reasoning on supported Macs, with automatic fallback to Accessibility matching."
+            "The default: on-device language reasoning on supported Macs, with automatic fallback to Accessibility matching."
         case .openAI:
             "Optional cloud reasoning. It is used only after you separately allow OpenAI text processing."
         }

@@ -59,6 +59,92 @@ final class VisualUnderstandingTests: XCTestCase {
         XCTAssertEqual(visualMark.visualKind, .circle)
     }
 
+    func testOverlappingOCRLabelsAnUnlabelledAccessibilityMark() throws {
+        let rowBounds = NormalizedRect(x: 0.2, y: 0.2, width: 0.35, height: 0.1)
+        let row = UIElementDescriptor(
+            id: "e_appearance", role: "AXRow", subrole: nil, label: nil,
+            title: nil, value: "0", enabled: true, focused: false,
+            bounds: rowBounds
+        )
+        XCTAssertEqual(row.bestLabel, "0", "AXValue must not prevent OCR label fusion")
+        var scene = makeScene(elements: [row])
+        scene.visualElements = [
+            VisualElementDescriptor(
+                id: "v_appearance", text: "Appearance",
+                bounds: .init(x: 0.25, y: 0.23, width: 0.14, height: 0.04),
+                confidence: 0.92,
+                kind: .text
+            )
+        ]
+
+        let marks = SetOfMarksBuilder().build(scene: scene, query: "dark mode")
+        let mark = try XCTUnwrap(marks.first)
+
+        XCTAssertEqual(marks.count, 1, "The fused OCR label must not create a duplicate mark")
+        XCTAssertEqual(mark.elementID, row.id)
+        XCTAssertEqual(mark.visualElementID, "v_appearance")
+        XCTAssertEqual(mark.bounds, rowBounds)
+        XCTAssertEqual(mark.label, "Appearance")
+        XCTAssertEqual(mark.source, .accessibility)
+        XCTAssertEqual(
+            SetOfMarksMatcher.bestMatch(for: "dark mode", in: marks)?.mark.elementID,
+            row.id
+        )
+    }
+
+    func testOCRIsAssignedOnlyToSmallestContainingUnlabelledTarget() throws {
+        let parent = UIElementDescriptor(
+            id: "parent", role: "AXRow", subrole: nil, label: nil, title: nil,
+            value: nil, enabled: true, focused: false,
+            bounds: .init(x: 0.1, y: 0.1, width: 0.6, height: 0.25)
+        )
+        let child = UIElementDescriptor(
+            id: "child", role: "AXButton", subrole: nil, label: nil, title: nil,
+            value: nil, enabled: true, focused: false,
+            bounds: .init(x: 0.2, y: 0.15, width: 0.25, height: 0.1)
+        )
+        var scene = makeScene(elements: [parent, child])
+        scene.visualElements = [
+            VisualElementDescriptor(
+                id: "v_appearance", text: "Appearance",
+                bounds: .init(x: 0.23, y: 0.18, width: 0.14, height: 0.04),
+                confidence: 0.9,
+                kind: .text
+            )
+        ]
+
+        let marks = SetOfMarksBuilder().build(scene: scene, query: "Appearance")
+        let childMark = try XCTUnwrap(marks.first { $0.elementID == "child" })
+        let parentMark = try XCTUnwrap(marks.first { $0.elementID == "parent" })
+
+        XCTAssertEqual(childMark.label, "Appearance")
+        XCTAssertEqual(childMark.visualElementID, "v_appearance")
+        XCTAssertEqual(parentMark.label, "Unlabelled control")
+        XCTAssertNil(parentMark.visualElementID)
+    }
+
+    func testOCRDoesNotReplaceAnExistingAccessibilityLabel() throws {
+        let row = UIElementDescriptor(
+            id: "e_general", role: "AXRow", subrole: nil, label: "General",
+            title: nil, value: nil, enabled: true, focused: false,
+            bounds: .init(x: 0.2, y: 0.2, width: 0.35, height: 0.1)
+        )
+        var scene = makeScene(elements: [row])
+        scene.visualElements = [
+            VisualElementDescriptor(
+                id: "v_other", text: "Appearance",
+                bounds: .init(x: 0.25, y: 0.23, width: 0.14, height: 0.04),
+                confidence: 0.92,
+                kind: .text
+            )
+        ]
+
+        let mark = try XCTUnwrap(SetOfMarksBuilder().build(scene: scene).first)
+
+        XCTAssertEqual(mark.label, "General")
+        XCTAssertNil(mark.visualElementID)
+    }
+
     func testAutomaticMarkMatcherUsesShapeAndPosition() throws {
         var scene = makeScene(elements: [])
         scene.visualElements = [

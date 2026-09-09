@@ -106,7 +106,7 @@ struct OpenAIProvider: InstructorModel {
             "model": model,
             "store": false,
             "input": [
-                ["role": "developer", "content": [["type": "input_text", "text": "You are Beacon, a macOS UI instructor. Prefer supplied stable element IDs. If a numbered visual preview is present, use targetMark to select its exact badge for canvas, CAD, icon, or unlabeled targets. Otherwise use only listed visual bounds. Never invent an ID, mark, or coordinate. Give one short next step, account for completed steps, and mark taskComplete only when the overall task is done. Set expectedOutcome.applicationScope to mayChange only when this step is expected to open or activate another application; otherwise use sameApplication. Supply exact expectedOutcome.element labels and AX role for appearance or focus, plus the expected value for a value change. Use a listed ID only for an existing expected control. Supply the exact destinationBundleIdentifier for app handoffs. Use null for unknown evidence; those steps require user confirmation. A generic visual change or closed Save dialog does not prove success."]]],
+                ["role": "developer", "content": [["type": "input_text", "text": "You are Beacon, a macOS UI instructor. Prefer supplied stable element IDs. If a numbered visual preview is present, use targetMark to select its exact badge for canvas, CAD, icon, or unlabeled targets. Otherwise use only listed visual bounds. Never invent an ID, mark, or coordinate. Give one short next step and account for completed steps. taskComplete means the overall task is already done in the current scene. completesTaskAfterSuccess means verifying the proposed action will finish the overall task. A control that opens a menu, account panel, settings page, sidebar section, or profile editor is a navigation step, not a final step; keep guiding after the interface changes. In Guide mode, return a pointToElement action for the next visible step or complete only when current scene evidence proves completion; never substitute a prose answer for a missing target. Set expectedOutcome.applicationScope to mayChange only when this step is expected to open or activate another application; otherwise use sameApplication. Supply exact expectedOutcome.element labels and AX role for appearance or focus, plus the expected value for a value change. Use a listed ID only for an existing expected control. Supply the exact destinationBundleIdentifier for app handoffs. Use null for unknown evidence; those steps require user confirmation. A generic visual change or closed Save dialog does not prove success."]]],
                 ["role": "user", "content": userContent]
             ],
             "text": ["format": [
@@ -122,7 +122,10 @@ struct OpenAIProvider: InstructorModel {
         [
             "type": "object",
             "additionalProperties": false,
-            "required": ["message", "action", "expectedOutcome", "taskComplete"],
+            "required": [
+                "message", "action", "expectedOutcome", "taskComplete",
+                "completesTaskAfterSuccess"
+            ],
             "properties": [
                 "message": ["type": "string"],
                 "action": [
@@ -187,7 +190,8 @@ struct OpenAIProvider: InstructorModel {
                         ]
                     ]
                 ],
-                "taskComplete": ["type": "boolean"]
+                "taskComplete": ["type": "boolean"],
+                "completesTaskAfterSuccess": ["type": "boolean"]
             ]
         ]
     }

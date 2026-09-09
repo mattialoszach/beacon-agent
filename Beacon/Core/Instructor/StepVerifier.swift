@@ -32,8 +32,16 @@ struct StepVerifier: Sendable {
                   let selector = expected.element else {
                 return .init(succeeded: false, explanation: "The expected control is not in the original window.")
             }
-            let old = SceneIdentity.elements(in: before, windowID: before.activeWindow?.id)
-            let new = SceneIdentity.elements(in: after, windowID: after.activeWindow?.id)
+            let old = verificationElements(
+                in: before,
+                windowID: before.activeWindow?.id,
+                selector: selector
+            )
+            let new = verificationElements(
+                in: after,
+                windowID: after.activeWindow?.id,
+                selector: selector
+            )
             let matching = new.filter { selector.matches($0) && $0.enabled }
             // Ambiguous selectors must never choose an arbitrary matching control.
             guard matching.count == 1, let target = matching.first else {
@@ -56,6 +64,62 @@ struct StepVerifier: Sendable {
                      : "The expected result has not been confirmed: \(expected.description)")
     }
 
+    /// Whether a failed raw-Accessibility verification has enough matching state to
+    /// justify one local OCR refresh. Labels are deliberately ignored here; role, value,
+    /// focus, stable identity, and the expected transition must still agree first.
+    func mayBenefitFromLocalVisualContext(
+        expected: ExpectedOutcome?,
+        before: ScreenScene,
+        after: ScreenScene
+    ) -> Bool {
+        guard let expected,
+              expected.canVerifyAutomatically,
+              let selector = expected.element,
+              !selector.labels.isEmpty,
+              after.visualElements.isEmpty else { return false }
+
+        let old = SceneIdentity.elements(in: before, windowID: before.activeWindow?.id)
+        let new = SceneIdentity.elements(in: after, windowID: after.activeWindow?.id)
+        guard new.filter({ selector.matches($0) && $0.enabled }).count != 1 else {
+            return false
+        }
+        guard selector.id != nil || selector.role != nil || selector.value != nil else {
+            return false
+        }
+        let candidates = new.filter { element in
+            guard element.enabled else { return false }
+            if let id = selector.id, id != element.id { return false }
+            if let role = selector.role, role != element.role { return false }
+            if let value = selector.value,
+               ExpectedElement.normalized(value)
+                != ExpectedElement.normalized(element.value ?? "") { return false }
+            return true
+        }
+
+        switch expected.type {
+        case .elementAppears:
+            return candidates.contains { candidate in
+                !old.contains { $0.id == candidate.id }
+            }
+        case .focusedElementChanges:
+            return candidates.contains { candidate in
+                candidate.focused
+                    && old.contains { $0.id == candidate.id && !$0.focused }
+            }
+        case .visualChange:
+            return candidates.contains { candidate in
+                old.contains { $0.id == candidate.id && $0.value != candidate.value }
+            }
+        case .windowAppears:
+            let oldWindowIDs = Set(SceneIdentity.visibleWindows(in: before).compactMap(\.id))
+            return candidates.contains { candidate in
+                candidate.windowID.map { !oldWindowIDs.contains($0) } == true
+            }
+        case .windowDisappears:
+            return false
+        }
+    }
+
     private func appearedWindow(
         matches expected: ExpectedOutcome, before: ScreenScene, after: ScreenScene, applicationChanged: Bool
     ) -> Bool {
@@ -67,10 +131,50 @@ struct StepVerifier: Sendable {
             if let title = expected.windowTitle,
                ExpectedElement.normalized(window.title ?? "") != ExpectedElement.normalized(title) { return false }
             if let selector = expected.element {
-                return after.elements.filter { $0.windowID == id && selector.matches($0) && $0.enabled }.count == 1
+                return verificationElements(in: after, windowID: id, selector: selector)
+                    .filter { selector.matches($0) && $0.enabled }.count == 1
             }
             return expected.windowTitle?.isEmpty == false
         }
         return candidates.count == 1
+    }
+
+    /// Set-of-Marks already owns the deterministic OCR-to-AX fusion rule used for
+    /// grounding. Reusing it here keeps verification on the same stable element IDs and
+    /// avoids treating OCR rectangles as independent controls.
+    private func verificationElements(
+        in scene: ScreenScene,
+        windowID: String?,
+        selector: ExpectedElement
+    ) -> [UIElementDescriptor] {
+        let query = selector.labels.joined(separator: " ")
+        let marks = SetOfMarksBuilder().build(
+            scene: scene,
+            query: query.isEmpty ? nil : query
+        )
+        let fusedLabels: [String: String] = Dictionary(
+            uniqueKeysWithValues: marks.compactMap { mark in
+                guard let id = mark.elementID,
+                      mark.visualElementID != nil else { return nil }
+                return (id, mark.label)
+            }
+        )
+        return SceneIdentity.elements(in: scene, windowID: windowID).map { element in
+            guard !element.hasExplicitLabel,
+                  let label = fusedLabels[element.id] else { return element }
+            return UIElementDescriptor(
+                id: element.id,
+                role: element.role,
+                subrole: element.subrole,
+                label: label,
+                title: element.title,
+                value: element.value,
+                enabled: element.enabled,
+                focused: element.focused,
+                bounds: element.bounds,
+                windowID: element.windowID,
+                selected: element.selected
+            )
+        }
     }
 }

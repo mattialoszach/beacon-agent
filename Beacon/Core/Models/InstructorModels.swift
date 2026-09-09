@@ -128,6 +128,10 @@ struct InstructorResponse: Codable, Equatable, Sendable {
     let action: SuggestedAction?
     let expectedOutcome: ExpectedOutcome?
     var taskComplete: Bool? = nil
+    /// True when successfully verifying the proposed action will finish the user's
+    /// overall goal. This is distinct from `taskComplete`, which describes the scene
+    /// before the user performs the proposed action.
+    var completesTaskAfterSuccess: Bool? = nil
 }
 
 extension InstructorResponse {
@@ -145,7 +149,8 @@ extension InstructorResponse {
                 overlay: action.overlay
             ),
             expectedOutcome: expectedOutcome,
-            taskComplete: taskComplete
+            taskComplete: taskComplete,
+            completesTaskAfterSuccess: completesTaskAfterSuccess
         )
     }
 }

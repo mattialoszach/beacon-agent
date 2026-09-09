@@ -2,7 +2,7 @@ import ApplicationServices
 import Foundation
 
 enum AccessibilityChangeEvent: Equatable, Sendable {
-    case notification(String)
+    case notification(name: String, role: String?, label: String?)
     case fallbackTimer
     case observerUnavailable
 }
@@ -60,7 +60,14 @@ final class AccessibilityChangeObserver {
     }
 
     fileprivate func received(element: AXUIElement, notification: String) {
-        continuation?.yield(.notification(notification))
+        let details = notification == kAXMenuOpenedNotification
+            ? observedIdentity(of: element)
+            : (role: nil, label: nil)
+        continuation?.yield(.notification(
+            name: notification,
+            role: details.role,
+            label: details.label
+        ))
         if notification == kAXFocusedUIElementChangedNotification
             || notification == kAXFocusedWindowChangedNotification
             || notification == kAXWindowCreatedNotification {
@@ -151,6 +158,33 @@ final class AccessibilityChangeObserver {
         let copied = unsafeBitCast(value, to: AXUIElement.self)
         AXUIElementSetMessagingTimeout(copied, AccessibilityMessagingTimeout.seconds)
         return copied
+    }
+
+    /// The AX tree in Electron applications can expose closed-menu descendants, making
+    /// before/after tree comparison inconclusive. The menu-open callback itself carries
+    /// the opened menu; retain only its short role/label so the controller can confirm it
+    /// was the highlighted menu rather than an unrelated one.
+    private func observedIdentity(of element: AXUIElement) -> (role: String?, label: String?) {
+        AXUIElementSetMessagingTimeout(element, AccessibilityMessagingTimeout.seconds)
+        let names = [kAXRoleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, "AXLabel"]
+        var copiedValues: CFArray?
+        guard AXUIElementCopyMultipleAttributeValues(
+            element,
+            names as CFArray,
+            AXCopyMultipleAttributeOptions(rawValue: 0),
+            &copiedValues
+        ) == .success,
+        let values = copiedValues as? [Any], values.count == names.count else {
+            return (nil, nil)
+        }
+        func string(at index: Int) -> String? {
+            guard !(values[index] is NSNull) else { return nil }
+            return values[index] as? String
+        }
+        let label = [string(at: 1), string(at: 2), string(at: 3)]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+        return (string(at: 0), label)
     }
 }
 

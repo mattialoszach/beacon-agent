@@ -13,6 +13,14 @@ final class ModelResponseParsingTests: XCTestCase {
         XCTAssertFalse(outcome.canVerifyAutomatically)
     }
 
+    func testDecodesWhetherAProposedStepWillFinishTheTask() throws {
+        let json = #"{"message":"Choose Dark","action":null,"expectedOutcome":null,"taskComplete":false,"completesTaskAfterSuccess":true}"#
+        let response = try JSONDecoder().decode(InstructorResponse.self, from: Data(json.utf8))
+
+        XCTAssertEqual(response.taskComplete, false)
+        XCTAssertEqual(response.completesTaskAfterSuccess, true)
+    }
+
     func testDecodesTypedStructuredResponse() throws {
         let json = #"{"message":"Click Export","action":{"type":"pointToElement","targetElementId":"e_13","targetBounds":null,"overlay":"spotlight"},"expectedOutcome":{"type":"windowAppears","description":"Export dialog appears","applicationScope":"sameApplication"}}"#
         let response = try JSONDecoder().decode(InstructorResponse.self, from: Data(json.utf8))

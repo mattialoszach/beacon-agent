@@ -130,6 +130,7 @@ enum SemanticElementMatcher {
     private static let synonyms: [String: Set<String>] = [
         "export": ["export", "share", "download", "save"],
         "preferences": ["preferences", "settings", "options"],
+        "appearance": ["appearance", "theme", "dark", "light"],
         "format": ["format", "type", "kind"],
         "close": ["close", "cancel", "done"],
         "open": ["open", "choose", "select"],

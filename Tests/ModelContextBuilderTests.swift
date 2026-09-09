@@ -52,6 +52,174 @@ final class ModelContextBuilderTests: XCTestCase {
         XCTAssertEqual(context.includedElementIDs, ["e_focus"])
     }
 
+    func testRelevantVisualSurvivesSaturatedAccessibilityBudget() throws {
+        var subject = scene(elements: (0..<20).map {
+            element(id: "e_\($0)", label: "Generic control \($0)")
+        })
+        let genericVisuals: [VisualElementDescriptor] = (0..<8).map { index in
+            let x = 0.45 + Double(index % 4) * 0.08
+            let y = 0.2 + Double(index / 4) * 0.08
+            return VisualElementDescriptor(
+                id: "v_generic_\(index)", text: "Unrelated \(index)",
+                bounds: .init(x: x, y: y, width: 0.06, height: 0.03),
+                confidence: 0.99,
+                kind: .text
+            )
+        }
+        subject.visualElements = genericVisuals + [
+            VisualElementDescriptor(
+                id: "v_appearance", text: "Appearance",
+                bounds: .init(x: 0.72, y: 0.72, width: 0.12, height: 0.04),
+                confidence: 0.55,
+                kind: .text
+            )
+        ]
+        var request = InstructorRequest(
+            question: "Where do I change to dark mode?",
+            scene: subject,
+            mode: .guide
+        )
+        request.setOfMarks = SetOfMarksBuilder().build(
+            scene: subject,
+            query: request.question
+        )
+        let appearanceMark = try XCTUnwrap(
+            request.setOfMarks.first { $0.visualElementID == "v_appearance" }
+        )
+
+        let context = ModelContextBuilder(
+            maximumElements: 4,
+            maximumCharacters: 1_200
+        ).build(for: request)
+
+        XCTAssertTrue(context.includedVisualElementIDs.contains("v_appearance"))
+        XCTAssertTrue(context.includedMarkIDs.contains(appearanceMark.id))
+        XCTAssertLessThanOrEqual(
+            context.includedElementIDs.count + context.includedVisualElementIDs.count,
+            4
+        )
+        XCTAssertLessThanOrEqual(context.userPrompt.count, 1_200)
+    }
+
+    func testSpatiallyRelevantVisualWinsReservedSlot() {
+        var subject = scene(elements: (0..<12).map {
+            element(id: "e_\($0)", label: "Generic control \($0)")
+        })
+        subject.visualElements = [
+            VisualElementDescriptor(
+                id: "a_left", text: "Circle",
+                bounds: .init(x: 0.1, y: 0.4, width: 0.08, height: 0.08),
+                confidence: 0.8,
+                kind: .circle
+            ),
+            VisualElementDescriptor(
+                id: "z_right", text: "Circle",
+                bounds: .init(x: 0.8, y: 0.4, width: 0.08, height: 0.08),
+                confidence: 0.8,
+                kind: .circle
+            )
+        ]
+
+        let context = ModelContextBuilder(maximumElements: 4, maximumCharacters: 1_000)
+            .build(for: InstructorRequest(
+                question: "Select the circle on the right",
+                scene: subject,
+                mode: .guide
+            ))
+
+        XCTAssertTrue(context.includedVisualElementIDs.contains("z_right"))
+        XCTAssertFalse(context.includedVisualElementIDs.contains("a_left"))
+    }
+
+    func testReservedVisualSurvivesCharacterSaturation() {
+        var subject = scene(elements: (0..<20).map {
+            element(
+                id: "e_\($0)",
+                label: "Control \($0) " + String(repeating: "description ", count: 20)
+            )
+        })
+        subject.visualElements = [
+            VisualElementDescriptor(
+                id: "v_appearance", text: "Appearance",
+                bounds: .init(x: 0.7, y: 0.7, width: 0.12, height: 0.04),
+                confidence: 0.7,
+                kind: .text
+            )
+        ]
+
+        let context = ModelContextBuilder(maximumElements: 8, maximumCharacters: 430)
+            .build(for: InstructorRequest(
+                question: "Open Appearance",
+                scene: subject,
+                mode: .guide
+            ))
+
+        XCTAssertTrue(context.includedVisualElementIDs.contains("v_appearance"))
+        XCTAssertLessThanOrEqual(context.userPrompt.count, 430)
+    }
+
+    func testAXRowReceivesActionableRanking() {
+        let toolbar = UIElementDescriptor(
+            id: "a_toolbar", role: "AXToolbar", subrole: nil, label: "Navigation",
+            title: nil, value: nil, enabled: true, focused: false,
+            bounds: .init(x: 0.1, y: 0.1, width: 0.2, height: 0.05)
+        )
+        let row = UIElementDescriptor(
+            id: "z_row", role: "AXRow", subrole: nil, label: "Navigation",
+            title: nil, value: nil, enabled: true, focused: false,
+            bounds: .init(x: 0.1, y: 0.2, width: 0.2, height: 0.05)
+        )
+
+        let context = ModelContextBuilder(maximumElements: 1, maximumCharacters: 500)
+            .build(for: InstructorRequest(
+                question: "Continue",
+                scene: scene(elements: [toolbar, row]),
+                mode: .guide
+            ))
+
+        XCTAssertEqual(context.includedElementIDs, ["z_row"])
+    }
+
+    func testFusedOCRLabelStaysAttachedToAccessibilityMarkInPrompt() throws {
+        var subject = scene(elements: (0..<20).map {
+            element(id: "e_\($0)", label: "Generic control \($0)")
+        } + [
+            UIElementDescriptor(
+                id: "row", role: "AXRow", subrole: nil, label: nil, title: nil,
+                value: "0", enabled: true, focused: false,
+                bounds: .init(x: 0.6, y: 0.4, width: 0.24, height: 0.08)
+            )
+        ])
+        subject.visualElements = [
+            VisualElementDescriptor(
+                id: "v_appearance", text: "Appearance",
+                bounds: .init(x: 0.64, y: 0.42, width: 0.12, height: 0.03),
+                confidence: 0.9,
+                kind: .text
+            )
+        ]
+        var request = InstructorRequest(
+            question: "Where do I change to dark mode?",
+            scene: subject,
+            mode: .guide
+        )
+        request.setOfMarks = SetOfMarksBuilder().build(
+            scene: subject,
+            query: request.question
+        )
+        let rowMark = try XCTUnwrap(request.setOfMarks.first { $0.elementID == "row" })
+
+        let context = ModelContextBuilder(maximumElements: 4, maximumCharacters: 1_000)
+            .build(for: request)
+
+        XCTAssertTrue(context.includedElementIDs.contains("row"))
+        XCTAssertTrue(context.includedMarkIDs.contains(rowMark.id))
+        XCTAssertTrue(
+            context.text.contains("[row mark=\(rowMark.id)] AXRow \"Appearance\"")
+        )
+        XCTAssertFalse(context.includedVisualElementIDs.contains("v_appearance"))
+    }
+
     func testSensitiveLabelsAreRedactedFromModelContext() {
         let context = ModelContextBuilder().build(for: InstructorRequest(
             question: "What is this field?",
@@ -176,6 +344,87 @@ final class LocalNavigationFallbackTests: XCTestCase {
             question: "How do I export the document?",
             labels: ["File", "Edit"]
         ))
+
+        XCTAssertEqual(response.action?.targetElementId, "e_0")
+    }
+
+    func testVSCodeThemeRequestStartsAtTheCodeMenu() async throws {
+        let response = try await provider.reason(request: request(
+            question: "How can I change my VSCode theme?",
+            labels: ["File", "Code", "Edit"]
+        ))
+
+        XCTAssertEqual(response.action?.targetElementId, "e_1")
+        XCTAssertEqual(response.message, "Select Code.")
+    }
+
+    func testVSCodeThemeRequestContinuesToSettingsAfterCode() async throws {
+        var request = request(
+            question: "How can I change my VSCode theme?",
+            labels: ["Code", "Settings", "Services"]
+        )
+        request.guideContext = GuideContext(
+            stepNumber: 2,
+            maximumSteps: 8,
+            completedSteps: [
+                CompletedGuideStep(
+                    number: 1,
+                    instruction: "Open the Code menu.",
+                    targetElementID: "e_0",
+                    targetLabel: "Code"
+                )
+            ]
+        )
+
+        let response = try await provider.reason(request: request)
+
+        XCTAssertEqual(response.action?.targetElementId, "e_1")
+        XCTAssertEqual(response.message, "Select Settings.")
+    }
+
+    func testProfileRequestContinuesThroughAVisibleAccountMenu() async throws {
+        var request = request(
+            question: "Where can I change my profile picture?",
+            labels: ["Manage your Google Account", "Sign out"]
+        )
+        request.guideContext = GuideContext(
+            stepNumber: 2,
+            maximumSteps: 8,
+            completedSteps: [
+                CompletedGuideStep(
+                    number: 1,
+                    instruction: "Open your account menu.",
+                    targetElementID: "old-profile-button",
+                    targetLabel: "Profile picture"
+                )
+            ]
+        )
+
+        let response = try await provider.reason(request: request)
+
+        XCTAssertEqual(response.action?.targetElementId, "e_0")
+        XCTAssertEqual(response.message, "Select Manage your Google Account.")
+    }
+
+    func testRepeatedProfileLabelOnANewStableElementRemainsEligible() async throws {
+        var request = request(
+            question: "Where can I change my profile picture?",
+            labels: ["Profile picture"]
+        )
+        request.guideContext = GuideContext(
+            stepNumber: 3,
+            maximumSteps: 8,
+            completedSteps: [
+                CompletedGuideStep(
+                    number: 1,
+                    instruction: "Open Profile picture.",
+                    targetElementID: "profile-from-previous-page",
+                    targetLabel: "Profile picture"
+                )
+            ]
+        )
+
+        let response = try await provider.reason(request: request)
 
         XCTAssertEqual(response.action?.targetElementId, "e_0")
     }

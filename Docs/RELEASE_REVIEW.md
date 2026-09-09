@@ -34,6 +34,9 @@ automated visual test uses synthetic in-memory images.
 | Permissions | After a denial, macOS never shows its prompt again, so "Grant Access" did nothing and offered no route forward. | The request opens the relevant Privacy & Security pane and the button relabels itself, with a note that Screen Recording needs a restart. |
 | Escape handling | Local key monitors consumed every Escape anywhere in Beacon, so backing out of the Remove-key dialog cancelled the running guide. | Escape still cancels guidance from an ordinary window, but a sheet, alert or dialog keeps its own. |
 | Guide dead ends | A recipe whose first control could not be matched, for example on a non-English system, returned a dead-end response and the model was never consulted. | Before a recipe completes any step, an unmatched control defers to the model. A committed recipe still stops with an actionable message. |
+| Navigation stopped after one click | An unverified avatar or menu click entered confirmation immediately, so opening Google's account menu left a text message instead of the next arrow. Provider completion claims could also end a navigation flow early. | Navigation-style guides now detect a changed menu, page, or control set and immediately replan the next grounded arrow. Focus-only changes are ignored, and browser guides retain local visual context when permitted. Lifecycle tests reproduce avatar → account menu continuation. |
+| Static Electron menus | VS Code can expose menu descendants before the **Code** menu is visibly open, so an `elementAppears` outcome saw the same tree after the click and reported “Beacon did not confirm the step.” | Every navigation step can use the same-window continuation fallback. The observer matches the menu-open callback to the highlighted label, captures `AXSelected`, and keeps local frame context when permitted. The local matcher knows Code → Settings → Theme priority. Regression tests use an identical before/after tree, advance Code → Settings, and reject an unrelated File-menu event. |
+| Observation could feel stuck | A missed Accessibility event waited on a three-second poll and retries could leave a guide watching for up to a minute; repeated capture errors silently restarted the wait. | The fallback poll starts after one second, each navigation observation is bounded to ten seconds, and three consecutive observation errors terminate with an actionable message. |
 | False verification | The TextEdit export step verified on any new sheet containing a Save button, so an ordinary Save sheet advanced the guide toward saving the wrong format. | Preview's export step verifies on the Format popup only that sheet has; TextEdit's requires user confirmation. |
 | Impossible step | The System Settings recipe expected Beacon's permission switch to change to on, which can never happen when it is already on, so the guide always timed out. | The already-enabled state satisfies the step, and a recipe whose remaining steps are satisfied reports completion. |
 | Stranded guides | Completing the expected step while Beacon waited for a lost view to return was never recognised, so the guide failed after 60 seconds. A display change during that wait was also ignored. | Recovery verifies the expected outcome and advances the guide; a display change ends the wait. A new state-machine arrow covers this and is tested. |
@@ -54,6 +57,7 @@ automated visual test uses synthetic in-memory images.
 | Keyboard access | The sidebar was built from plain buttons, so it was not arrow-key navigable and did not expose selection to VoiceOver. | It is a selection-driven list. |
 | Exclusion UI | An excluded application that had quit disappeared from the list, so its exclusion could not be removed. | Excluded identifiers are always listed and the list refreshes on launch and quit. |
 | Light appearance | The sidebar logo was forced white on a light translucent sidebar, leaving the header blank. | It uses the brand tint. |
+| Instruction appearance | The fixed lavender callout looked like a white text box and its arrow chose a target side without regard to the instruction position. | The callout now uses macOS adaptive material with purple content, and arrow layout connects the callout-facing side to the target. Geometry and contrast tests cover it. |
 | Prompt focus | The question panel stayed on every Space after the user clicked into another application and could not be dismissed there. | Losing key status closes it. |
 | Nested windows | The focused-window filter matched only the immediate parent, so an alert presented over a sheet lost every control and could not be pointed at. | Window relationships are followed transitively, with tests for nesting, unrelated windows and cycles. |
 | Stalled elements | An element whose batched read timed out still triggered a second timed-out read for its actions, halving how much of a busy application's interface the traversal could reach. | A timed-out element ends that branch and marks the capture truncated. |
@@ -110,18 +114,19 @@ overlay is click-through.
 ## Owner test plan
 
 1. Build and open `.build/Beacon.app`. Try the shortcut with the main window open and closed.
-2. With Accessibility granted and Screen Recording denied, locate Print in TextEdit and change a checkbox in System Settings. A value change must be observed without a screenshot.
+2. With Accessibility granted and Screen Recording denied, locate Print in TextEdit, then ask “Where do I change to dark mode?” in System Settings. Beacon must point to Appearance, continue to Dark, render purple words and an arrow for both steps, and stop only after the Dark value is selected. Also change a checkbox and confirm its value change is observed without a screenshot.
 3. Press Escape during capture, reasoning, visible guidance, and recovery, then immediately start another question. No old answer or overlay may reappear. Repeat with Pause Screen Access and Dismiss Overlay. Open the Models tab, start removing the API key, and press Escape: the dialog closes and any guide keeps running.
 4. Ask an informational question. Read the answer beside the pointer and in History. It must not ask you to confirm anything.
 5. Deny a permission, then use Grant Access in Permissions: System Settings must open at the right pane.
 6. With Dock auto-hide on, start a guide and reveal the Dock; the guide must continue. Then disconnect or rearrange a display: the guide must stop and say so.
-7. Open and close menus, switch apps, move a window, and switch between two windows with the same title during a guide. Record any wrong target or unexpected progression.
+7. Open and close menus, switch apps, move a window, and switch between two windows with the same title during a guide. In Chrome, ask how to change your Google profile picture: after clicking the avatar, Beacon must replace the first overlay with an arrow to the next visible account control rather than stopping at a message. In VS Code, ask “How can I change my VSCode theme?”, open the highlighted Code menu, and verify that Beacon immediately points to the next menu command. Opening File instead must not advance. Clicking without an interface change must not falsely advance. Record any wrong target or unexpected progression.
 8. Exercise TextEdit export and Print, Finder New Folder, Safari Settings, and System Settings permissions, with the permission both off and already on. Cancel a save dialog and change an unrelated control while waiting; these must leave the guide unconfirmed.
 9. Test Preview PDF export from both a PDF and a PNG or JPEG source and inspect the actual saved file before choosing Confirm Result.
 10. Test multiple displays at mixed scales, including a display to the left of and above the primary. Guidance must appear on the display holding the target and the unrelated screen must not dim.
 11. Use synthetic private data to check password, email, phone, payment-card, API-key, and complete multi-line PEM masks, including a card number on a line with other numbers. Put an excluded app on the same display as the active app and confirm no screenshot is taken. Trigger a notification from an excluded app during a capture and confirm the banner is absent.
 12. With your own consent and key, test text-only OpenAI, then the separate image opt-in and the exact Privacy preview. Type a partial key without saving and confirm the stored key is still used. Test offline operation and an invalid key.
-13. Save, edit, remove, and re-add a disposable test key. Also queue two rapid saves and confirm the newer draft wins. Restart the app and check persistence.
+13. Switch macOS between Light and Dark appearance while guidance is visible. The instruction surface must follow the system material and purple words/arrows must remain readable.
+14. Save, edit, remove, and re-add a disposable test key. Also queue two rapid saves and confirm the newer draft wins. Restart the app and check persistence.
 
 ## Automated evidence
 
@@ -131,7 +136,7 @@ target macOS 14.
 | Check | Result |
 | --- | --- |
 | `swift build` | Succeeds with no warnings. |
-| `swift test` | 239 tests, zero failures; the real-model test is skipped by default. |
+| `swift test` | 283 tests, zero failures; the real-model test is skipped by default. |
 | `swift test --parallel` | Passes; the suite is safe to run concurrently. |
 | `BEACON_RUN_MODEL_TESTS=1 swift test` | The on-device Apple Foundation Model test passes. |
 | `./scripts/build-app.sh` | Host release packaging passed. |
@@ -143,4 +148,4 @@ target macOS 14.
 | `otool -l` on the packaged binary | FoundationModels is a weak link, so the binary loads on macOS 14 and 15. |
 
 Successful Developer ID signing, notarization, a live OpenAI round trip, and real-app
-acceptance were not exercised. The baseline for this pass was 155 tests; it is now 239.
+acceptance were not exercised. The baseline for this pass was 155 tests; it is now 283.

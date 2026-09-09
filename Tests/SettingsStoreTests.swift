@@ -3,6 +3,30 @@ import XCTest
 
 @MainActor
 final class SettingsStoreTests: XCTestCase {
+    func testMissingProviderPreferenceDefaultsToOnDeviceReasoning() {
+        withDefaults { defaults in
+            let store = ModelConfigurationStore(
+                defaults: defaults,
+                apiKeyStorage: InMemoryAPIKeyStorage()
+            )
+
+            XCTAssertEqual(store.provider, .apple)
+        }
+    }
+
+    func testExplicitAccessibilityProviderIsPreserved() {
+        withDefaults { defaults in
+            defaults.set(ModelProviderChoice.accessibility.rawValue, forKey: "models.provider")
+
+            let store = ModelConfigurationStore(
+                defaults: defaults,
+                apiKeyStorage: InMemoryAPIKeyStorage()
+            )
+
+            XCTAssertEqual(store.provider, .accessibility)
+        }
+    }
+
     func testDeveloperInspectorIsHiddenByDefaultAndPreferencePersists() {
         withDefaults { defaults in
             let store = AppPreferencesStore(defaults: defaults)

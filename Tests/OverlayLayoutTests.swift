@@ -117,6 +117,83 @@ final class OverlayLayoutTests: XCTestCase {
         XCTAssertTrue(geometry.hoverBounds.contains(geometry.end))
     }
 
+    @MainActor
+    func testEveryActionableTargetStyleIncludesTheArrowFadeRegion() throws {
+        let frame = CGRect(x: 0, y: 0, width: 800, height: 600)
+        let mapper = CoordinateSpaceMapper(
+            virtualDesktopBounds: frame,
+            appKitMainScreenMaxY: frame.maxY
+        )
+        let cursor = CursorPositionMonitor()
+
+        for style in OverlayStyle.allCases {
+            let view = OverlayCanvasView(
+                presentation: .init(
+                    target: .visualRegion(
+                        bounds: .init(x: 0.4, y: 0.4, width: 0.1, height: 0.1)
+                    ),
+                    instruction: "Choose the highlighted control.",
+                    style: style,
+                    debugElements: []
+                ),
+                screenFrame: frame,
+                mapper: mapper,
+                cursorPositionMonitor: cursor
+            )
+            let target = try XCTUnwrap(view.targetRect)
+            let callout = InstructionCalloutGeometry.layout(
+                text: "Choose the highlighted control.",
+                target: target,
+                availableSize: frame.size
+            )
+            let arrow = try XCTUnwrap(GuidanceArrowGeometry.layout(
+                target: target,
+                availableSize: frame.size,
+                preferredSide: callout.preferredArrowSide(relativeTo: target)
+            ))
+            let regions = view.fadeRegions(in: frame.size)
+
+            XCTAssertTrue(
+                regions.contains { region in
+                    region.contains(arrow.start)
+                        && region.contains(arrow.control)
+                        && region.contains(arrow.end)
+                },
+                "\(style.rawValue) guidance must include the arrow in proximity fading"
+            )
+        }
+    }
+
+    func testArrowEmergesFromTheCalloutSideWhenSpaceAllows() throws {
+        let target = CGRect(x: 350, y: 250, width: 100, height: 60)
+        let available = CGSize(width: 800, height: 600)
+        let callout = InstructionCalloutGeometry.layout(
+            text: "Choose the highlighted control.",
+            target: target,
+            availableSize: available
+        )
+        let preferred = callout.preferredArrowSide(relativeTo: target)
+        let arrow = try XCTUnwrap(GuidanceArrowGeometry.layout(
+            target: target,
+            availableSize: available,
+            preferredSide: preferred
+        ))
+
+        XCTAssertEqual(arrow.side, preferred)
+        XCTAssertEqual(preferred, .bottom)
+        XCTAssertGreaterThan(arrow.start.y, arrow.end.y)
+    }
+
+    func testPurpleInstructionPaletteHasReadableContrast() {
+        XCTAssertGreaterThanOrEqual(
+            contrastRatio(
+                foreground: BeaconPalette.Hex.blueViolet,
+                background: BeaconPalette.Hex.lavender
+            ),
+            4.5
+        )
+    }
+
     func testCalloutGeometryStaysInsideTheAvailableArea() {
         let availableSize = CGSize(width: 800, height: 600)
         let geometry = InstructionCalloutGeometry.layout(
@@ -133,6 +210,23 @@ final class OverlayLayoutTests: XCTestCase {
         let xDistance = max(max(rect.minX - point.x, 0), point.x - rect.maxX)
         let yDistance = max(max(rect.minY - point.y, 0), point.y - rect.maxY)
         return hypot(xDistance, yDistance)
+    }
+
+    private func contrastRatio(foreground: Int, background: Int) -> Double {
+        let foregroundLuminance = relativeLuminance(foreground)
+        let backgroundLuminance = relativeLuminance(background)
+        return (max(foregroundLuminance, backgroundLuminance) + 0.05)
+            / (min(foregroundLuminance, backgroundLuminance) + 0.05)
+    }
+
+    private func relativeLuminance(_ hex: Int) -> Double {
+        let channels = [16, 8, 0].map { shift -> Double in
+            let component = Double((hex >> shift) & 0xFF) / 255
+            return component <= 0.04045
+                ? component / 12.92
+                : pow((component + 0.055) / 1.055, 2.4)
+        }
+        return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722
     }
 }
 

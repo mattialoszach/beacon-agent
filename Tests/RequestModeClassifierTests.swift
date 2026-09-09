@@ -38,6 +38,41 @@ final class RequestModeClassifierTests: XCTestCase {
         XCTAssertEqual(classifier.classify("PDF", scene: scene), .guide)
     }
 
+    func testTerseInterfaceGoalDefaultsToGuidance() {
+        XCTAssertEqual(classifier.classify("Dark mode"), .guide)
+    }
+
+    func testHelpRequestUsesTheActualExplanationOrActionIntent() {
+        XCTAssertEqual(classifier.classify("Can you help me understand this warning?"), .ask)
+        XCTAssertEqual(classifier.classify("Help me understand this"), .ask)
+        XCTAssertEqual(classifier.classify("Can you help me change to dark mode?"), .guide)
+        XCTAssertEqual(classifier.classify("Help me change to dark mode"), .guide)
+    }
+
+    func testExplicitExplanationWinsDespiteVisibleActionAndGuideBiasedSemantics() {
+        let export = UIElementDescriptor(
+            id: "export", role: "AXButton", subrole: nil, label: "Export", title: nil,
+            value: nil, enabled: true, focused: false,
+            bounds: .init(x: 0.2, y: 0.2, width: 0.1, height: 0.05)
+        )
+        let scene = ScreenScene(
+            timestamp: Date(),
+            activeApplication: .init(name: "Fixture", bundleIdentifier: "test", processIdentifier: 1),
+            activeWindow: nil,
+            screenshot: nil,
+            elements: [export],
+            displays: []
+        )
+        let guideBiased = RequestModeClassifier(
+            semanticScorer: FixedSemanticScorer(ask: 0.05, guide: 0.95)
+        )
+
+        XCTAssertEqual(
+            guideBiased.classify("Explain why I should change Export", scene: scene),
+            .ask
+        )
+    }
+
     func testSemanticScorerHandlesRequestsWithoutKnownPhrases() {
         let semanticClassifier = RequestModeClassifier(
             semanticScorer: FixedSemanticScorer(ask: 0.05, guide: 0.95)

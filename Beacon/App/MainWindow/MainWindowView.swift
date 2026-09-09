@@ -149,7 +149,7 @@ private struct HomeView: View {
                 HStack(spacing: 14) {
                     FeatureCard(icon: "keyboard", title: "Option + Space", detail: "Open Beacon beside your pointer from anywhere.")
                     FeatureCard(icon: "cursorarrow.rays", title: "Native guidance", detail: "Highlights are click-through and dismiss with Escape.")
-                    FeatureCard(icon: "lock.shield", title: "Private by design", detail: "Accessibility matching runs on your Mac by default.")
+                    FeatureCard(icon: "lock.shield", title: "Private by design", detail: "On-device reasoning and Accessibility grounding stay on your Mac.")
                 }
 
                 if let response = controller.currentResponse {

@@ -29,15 +29,50 @@ struct ModelContextBuilder: Sendable {
         let queryTokens = tokens(question)
         let windowBounds = request.scene.activeWindow?.bounds
         let marksByElementID = Dictionary(request.setOfMarks.compactMap { mark in
-            mark.elementID.map { ($0, mark.id) }
+            mark.elementID.map { ($0, mark) }
         }, uniquingKeysWith: { first, _ in first })
         let marksByVisualElementID = Dictionary(request.setOfMarks.compactMap { mark in
             mark.visualElementID.map { ($0, mark.id) }
         }, uniquingKeysWith: { first, _ in first })
+        let rankedVisualCandidates = request.scene.visualElements
+            .filter { $0.bounds.isValid && $0.confidence.isFinite && (0...1).contains($0.confidence) }
+            .filter { !isRepresentedByAccessibilityMark($0, marks: request.setOfMarks) }
+            .map {
+                (
+                    element: $0,
+                    relevance: visualRelevance(for: $0, question: question)
+                )
+            }
+            .sorted {
+                if $0.relevance != $1.relevance { return $0.relevance > $1.relevance }
+                if $0.element.confidence != $1.element.confidence {
+                    return $0.element.confidence > $1.element.confidence
+                }
+                return $0.element.id < $1.element.id
+            }
+        let rankedVisuals = rankedVisualCandidates.map(\.element)
+        // OCR is often the only label for SwiftUI-backed controls. Reserve part of the
+        // total element budget before AX fills it, while keeping the visual share bounded.
+        let relevantVisualCount = rankedVisualCandidates.prefix { $0.relevance > 0 }.count
+        let reservedVisualCount = min(
+            relevantVisualCount,
+            min(Self.maximumReservedVisualElements, maximumElements / 4)
+        )
         let ranked = request.scene.elements
             .filter { $0.enabled && $0.bounds?.isValid == true }
             .map { element in
-                (element: element, score: score(element, queryTokens: queryTokens, windowBounds: windowBounds))
+                let mark = marksByElementID[element.id]
+                return (
+                    element: element,
+                    mark: mark,
+                    score: score(
+                        element,
+                        supplementalMark: mark,
+                        question: question,
+                        queryTokens: queryTokens,
+                        windowBounds: windowBounds
+                    )
+                )
             }
             .sorted {
                 if $0.score != $1.score { return $0.score > $1.score }
@@ -47,32 +82,47 @@ struct ModelContextBuilder: Sendable {
 
         var lines: [String] = []
         var ids = Set<String>()
+        var visualIDs = Set<String>()
         var markIDs = Set<Int>()
         var characterCount = header.count
-        for candidate in ranked.prefix(maximumElements) {
-            let markID = marksByElementID[candidate.element.id]
-            let line = promptLine(for: candidate.element, markID: markID)
-            guard characterCount + line.count + 1 <= contextBudget else { continue }
-            lines.append(line)
-            ids.insert(candidate.element.id)
-            if let markID { markIDs.insert(markID) }
-            characterCount += line.count + 1
-        }
 
-        let selectedVisualElements = request.scene.visualElements
-            .filter { $0.bounds.isValid && $0.confidence.isFinite && (0...1).contains($0.confidence) }
-            .sorted { $0.confidence == $1.confidence ? $0.id < $1.id : $0.confidence > $1.confidence }
-            .prefix(max(0, min(20, maximumElements - lines.count)))
-        var visualIDs = Set<String>()
-        for visual in selectedVisualElements {
-            let bounds = format(visual.bounds)
-            let markID = marksByVisualElementID[visual.id]
-            let mark = markID.map { " mark=\($0)" } ?? ""
-            let line = "[\(visual.id)\(mark)] visual=\(visual.kind.rawValue) \"\(sanitized(visual.bestLabel, limit: 100))\" confidence=\(Int(visual.confidence * 100))% bounds=\(bounds)"
+        // Add the reserved visual candidates first so long AX labels cannot consume the
+        // character budget that made those slots useful in the first place.
+        for visual in rankedVisuals.prefix(reservedVisualCount) {
+            let line = visualPromptLine(
+                for: visual,
+                markID: marksByVisualElementID[visual.id]
+            )
             guard characterCount + line.count + 1 <= contextBudget else { continue }
             lines.append(line)
             visualIDs.insert(visual.id)
-            if let markID { markIDs.insert(markID) }
+            if let markID = marksByVisualElementID[visual.id] { markIDs.insert(markID) }
+            characterCount += line.count + 1
+        }
+
+        let maximumAccessibilityCount = max(0, maximumElements - visualIDs.count)
+        for candidate in ranked.prefix(maximumAccessibilityCount) {
+            let line = promptLine(for: candidate.element, mark: candidate.mark)
+            guard characterCount + line.count + 1 <= contextBudget else { continue }
+            lines.append(line)
+            ids.insert(candidate.element.id)
+            if let markID = candidate.mark?.id { markIDs.insert(markID) }
+            characterCount += line.count + 1
+        }
+
+        // If AX did not use every slot, retain the previous behavior of admitting more
+        // visual context, still under a strict per-prompt visual cap.
+        for visual in rankedVisuals where lines.count < maximumElements
+            && visualIDs.count < Self.maximumVisualElements {
+            guard !visualIDs.contains(visual.id) else { continue }
+            let line = visualPromptLine(
+                for: visual,
+                markID: marksByVisualElementID[visual.id]
+            )
+            guard characterCount + line.count + 1 <= contextBudget else { continue }
+            lines.append(line)
+            visualIDs.insert(visual.id)
+            if let markID = marksByVisualElementID[visual.id] { markIDs.insert(markID) }
             characterCount += line.count + 1
         }
 
@@ -111,28 +161,89 @@ struct ModelContextBuilder: Sendable {
 
     private func score(
         _ element: UIElementDescriptor,
+        supplementalMark: SetOfMark?,
+        question: String,
         queryTokens: Set<String>,
         windowBounds: NormalizedRect?
     ) -> Int {
-        let candidateTokens = tokens([element.label, element.title, element.value, element.role]
-            .compactMap { $0 }.joined(separator: " "))
+        let label = effectiveLabel(for: element, mark: supplementalMark)
+        let candidate = [element.label, element.title, element.value, element.role, label]
+            .compactMap { $0 }.joined(separator: " ")
+        let candidateTokens = tokens(candidate)
         var result = queryTokens.intersection(candidateTokens).count * 100
+        result += Int((SemanticElementMatcher.relevanceScore(
+            query: question,
+            candidate: candidate
+        ) * 100).rounded())
         if element.focused { result += 80 }
-        if element.bestLabel != "Unlabelled control" { result += 20 }
+        if label != "Unlabelled control" { result += 20 }
         if let role = element.role, Self.actionableRoles.contains(role) { result += 15 }
         if let windowBounds, let bounds = element.bounds, contains(windowBounds, bounds) { result += 10 }
         if element.role == "AXMenuBarItem" || element.role == "AXMenuItem" { result += 8 }
         return result
     }
 
-    private func promptLine(for element: UIElementDescriptor, markID: Int?) -> String {
+    private func promptLine(for element: UIElementDescriptor, mark: SetOfMark?) -> String {
         let role = sanitized(element.role ?? "UIElement", limit: 40)
-        let label = sanitized(element.bestLabel, limit: 120)
-        let flags = [element.focused ? "focused" : nil].compactMap { $0 }.joined(separator: ",")
-        let mark = markID.map { " mark=\($0)" } ?? ""
+        let label = sanitized(effectiveLabel(for: element, mark: mark), limit: 120)
+        let flags = [
+            element.focused ? "focused" : nil,
+            element.selected == true ? "selected" : nil
+        ].compactMap { $0 }.joined(separator: ",")
+        let markText = mark.map { " mark=\($0.id)" } ?? ""
         let value = ["AXCheckBox", "AXRadioButton", "AXPopUpButton"].contains(element.role ?? "")
             ? element.value.map { " value=\"\(sanitized($0, limit: 80))\"" } ?? "" : ""
-        return "[\(element.id)\(mark)] \(role) \"\(label)\"\(value)\(flags.isEmpty ? "" : " (\(flags))")"
+        return "[\(element.id)\(markText)] \(role) \"\(label)\"\(value)\(flags.isEmpty ? "" : " (\(flags))")"
+    }
+
+    private func visualPromptLine(for visual: VisualElementDescriptor, markID: Int?) -> String {
+        let mark = markID.map { " mark=\($0)" } ?? ""
+        return "[\(visual.id)\(mark)] visual=\(visual.kind.rawValue) \"\(sanitized(visual.bestLabel, limit: 100))\" confidence=\(Int(visual.confidence * 100))% bounds=\(format(visual.bounds))"
+    }
+
+    private func effectiveLabel(for element: UIElementDescriptor, mark: SetOfMark?) -> String {
+        guard !element.hasExplicitLabel,
+              let mark,
+              mark.visualElementID != nil else { return element.bestLabel }
+        return mark.label
+    }
+
+    private func visualRelevance(
+        for visual: VisualElementDescriptor,
+        question: String
+    ) -> Double {
+        let normalized = question.lowercased()
+        var score = SemanticElementMatcher.relevanceScore(
+            query: question,
+            candidate: visual.bestLabel
+        )
+        if visual.kind == .circle,
+           normalized.contains("circle") || normalized.contains("round") { score += 0.5 }
+        if visual.kind == .rectangle,
+           normalized.contains("rectangle") || normalized.contains("square")
+            || normalized.contains("box") { score += 0.5 }
+        if visual.kind == .icon,
+           normalized.contains("icon") || normalized.contains("symbol") { score += 0.5 }
+        if visual.kind == .canvasShape,
+           normalized.contains("shape") || normalized.contains("object")
+            || normalized.contains("drawing") { score += 0.5 }
+        if normalized.contains("left"), visual.bounds.center.x <= 0.42 { score += 0.1 }
+        if normalized.contains("right"), visual.bounds.center.x >= 0.58 { score += 0.1 }
+        if normalized.contains("top"), visual.bounds.center.y <= 0.42 { score += 0.1 }
+        if normalized.contains("bottom"), visual.bounds.center.y >= 0.58 { score += 0.1 }
+        return score
+    }
+
+    private func isRepresentedByAccessibilityMark(
+        _ visual: VisualElementDescriptor,
+        marks: [SetOfMark]
+    ) -> Bool {
+        marks.contains { mark in
+            mark.elementID != nil
+                && ExpectedElement.normalized(mark.label)
+                    == ExpectedElement.normalized(visual.bestLabel)
+                && overlapRatio(mark.bounds, visual.bounds) > 0.58
+        }
     }
 
     private func tokens(_ text: String) -> Set<String> {
@@ -158,10 +269,26 @@ struct ModelContextBuilder: Sendable {
             && inner.center.y >= outer.y && inner.center.y <= outer.y + outer.height
     }
 
+    private func overlapRatio(_ lhs: NormalizedRect, _ rhs: NormalizedRect) -> Double {
+        let width = max(
+            0,
+            min(lhs.x + lhs.width, rhs.x + rhs.width) - max(lhs.x, rhs.x)
+        )
+        let height = max(
+            0,
+            min(lhs.y + lhs.height, rhs.y + rhs.height) - max(lhs.y, rhs.y)
+        )
+        return width * height
+            / max(0.000_000_1, min(lhs.width * lhs.height, rhs.width * rhs.height))
+    }
+
     private static let actionableRoles: Set<String> = [
         "AXButton", "AXCheckBox", "AXComboBox", "AXLink", "AXMenuBarItem", "AXMenuItem",
-        "AXPopUpButton", "AXRadioButton", "AXSlider", "AXTabGroup", "AXTextField"
+        "AXPopUpButton", "AXRadioButton", "AXRow", "AXSlider", "AXTabGroup", "AXTextField"
     ]
+
+    private static let maximumReservedVisualElements = 12
+    private static let maximumVisualElements = 20
 
     private static let stopWords: Set<String> = [
         "a", "about", "an", "can", "do", "does", "how", "i", "is", "me", "my",

@@ -113,6 +113,98 @@ final class StepVerifierTests: XCTestCase {
                           "The observer must detect the change before invoking the verifier.")
     }
 
+    func testOCRFusedLabelCanVerifyAnAppearingAccessibilityControl() {
+        let app = ApplicationDescriptor(
+            name: "System Settings",
+            bundleIdentifier: "com.apple.systempreferences",
+            processIdentifier: 1
+        )
+        let window = WindowDescriptor(title: "Appearance", bounds: nil, id: "settings")
+        let open = UIElementDescriptor(
+            id: "appearance", role: "AXRow", subrole: nil, label: "Appearance",
+            title: nil, value: nil, enabled: true, focused: false,
+            bounds: .init(x: 0.1, y: 0.1, width: 0.3, height: 0.08), windowID: "settings"
+        )
+        let dark = UIElementDescriptor(
+            id: "dark", role: "AXRadioButton", subrole: nil, label: nil,
+            title: nil, value: "0", enabled: true, focused: false,
+            bounds: .init(x: 0.55, y: 0.2, width: 0.18, height: 0.08), windowID: "settings"
+        )
+        let before = ScreenScene(
+            timestamp: Date(), activeApplication: app, activeWindow: window,
+            screenshot: nil, elements: [open], displays: []
+        )
+        var after = ScreenScene(
+            timestamp: Date(), activeApplication: app, activeWindow: window,
+            screenshot: nil, elements: [open, dark], displays: []
+        )
+        after.visualElements = [
+            VisualElementDescriptor(
+                id: "ocr_dark", text: "Dark",
+                bounds: .init(x: 0.58, y: 0.22, width: 0.08, height: 0.03),
+                confidence: 0.95, kind: .text
+            )
+        ]
+
+        let result = StepVerifier().verify(
+            expected: ExpectedOutcome(
+                type: .elementAppears,
+                description: "The Dark choice appears.",
+                element: ExpectedElement(labels: ["Dark"], role: "AXRadioButton")
+            ),
+            before: before,
+            after: after
+        )
+
+        XCTAssertTrue(result.succeeded)
+    }
+
+    func testOCRFusedLabelCanVerifyAStableControlValueChange() {
+        func scene(value: String) -> ScreenScene {
+            let bounds = NormalizedRect(x: 0.55, y: 0.2, width: 0.18, height: 0.08)
+            var result = ScreenScene(
+                timestamp: Date(),
+                activeApplication: .init(
+                    name: "System Settings",
+                    bundleIdentifier: "com.apple.systempreferences",
+                    processIdentifier: 1
+                ),
+                activeWindow: .init(title: "Appearance", bounds: nil, id: "settings"),
+                screenshot: nil,
+                elements: [
+                    UIElementDescriptor(
+                        id: "dark", role: "AXRadioButton", subrole: nil, label: nil,
+                        title: nil, value: value, enabled: true, focused: false,
+                        bounds: bounds, windowID: "settings"
+                    )
+                ],
+                displays: []
+            )
+            result.visualElements = [
+                VisualElementDescriptor(
+                    id: "ocr_dark", text: "Dark",
+                    bounds: .init(x: 0.58, y: 0.22, width: 0.08, height: 0.03),
+                    confidence: 0.95, kind: .text
+                )
+            ]
+            return result
+        }
+
+        let result = StepVerifier().verify(
+            expected: ExpectedOutcome(
+                type: .visualChange,
+                description: "Dark appearance is selected.",
+                element: ExpectedElement(
+                    labels: ["Dark"], role: "AXRadioButton", value: "1"
+                )
+            ),
+            before: scene(value: "0"),
+            after: scene(value: "1")
+        )
+
+        XCTAssertTrue(result.succeeded)
+    }
+
     private func scene(
         title: String,
         labels: [String],

@@ -67,7 +67,11 @@ final class ModelConfigurationStore: ObservableObject {
     ) {
         self.defaults = defaults
         self.apiKeyStorage = apiKeyStorage
-        let savedProvider = ModelProviderChoice(rawValue: defaults.string(forKey: Keys.provider) ?? "") ?? .accessibility
+        // Prefer genuine on-device reasoning whenever no provider preference has ever
+        // been saved. The controller keeps the deterministic Accessibility matcher as
+        // the automatic fallback, and every explicitly saved provider still wins.
+        let savedProvider = defaults.string(forKey: Keys.provider)
+            .flatMap(ModelProviderChoice.init(rawValue:)) ?? .apple
         let usedLegacyLocalOnlyMode = defaults.string(forKey: Keys.legacyProcessingMode) == "Local Only"
         provider = savedProvider == .openAI && usedLegacyLocalOnlyMode ? .accessibility : savedProvider
         let savedOpenAIModel = defaults.string(forKey: Keys.openAIModel)

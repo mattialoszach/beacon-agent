@@ -30,7 +30,11 @@ struct AppleFoundationModelProvider: InstructorModel {
         You are Beacon, a concise macOS UI instructor. Prefer an element ID listed in the prompt. You may
         choose a listed mark number for a visual fallback. Give exactly one next step. Never invent an element
         ID, mark, or coordinate. If the task is already done,
-        choose complete. If no listed control is useful, choose explain and say what the user should reveal.
+        choose complete. In Guide mode, point to the next useful listed control; never substitute an explanation
+        for a missing target. taskComplete describes the current scene. Set completesTaskAfterSuccess only when
+        successful verification of this proposed action will finish the user's overall goal. Controls that open
+        a menu, account panel, settings page, sidebar section, or profile editor are navigation steps, not final
+        steps; keep guiding after the interface changes.
         Set expectedApplicationScope to mayChange only when this step should open or activate another app;
         otherwise use sameApplication.
         Describe the exact expected control label and role for automatic verification, and its expected
@@ -91,7 +95,8 @@ struct AppleFoundationModelProvider: InstructorModel {
                     destinationBundleIdentifier: Self.value(payload.destinationBundleIdentifier)
                 )
             },
-            taskComplete: payload.taskComplete || actionType == .complete
+            taskComplete: payload.taskComplete || actionType == .complete,
+            completesTaskAfterSuccess: payload.completesTaskAfterSuccess
         )
         let normalized = result.normalizingVisualTarget(in: request.scene)
         _ = try normalized.action?.validated(in: request.scene, marks: request.setOfMarks)
@@ -151,5 +156,8 @@ private struct AppleInstructionPayload {
 
     @Guide(description: "True only when the user's overall task is complete")
     let taskComplete: Bool
+
+    @Guide(description: "True only when successful verification of this proposed action will finish the overall task")
+    let completesTaskAfterSuccess: Bool
 }
 #endif

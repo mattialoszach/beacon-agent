@@ -164,6 +164,40 @@ struct ApplicationGuidePolicyRegistry: Sendable {
             bundleIdentifier: "com.apple.systempreferences",
             recipes: [
                 ApplicationGuideRecipe(
+                    id: "dark-appearance",
+                    requestTerms: ["dark"],
+                    steps: [
+                        GuideRecipeStep(
+                            instruction: "Open Appearance.",
+                            targetAliases: ["Appearance"],
+                            expectedOutcome: ExpectedOutcome(
+                                type: .elementAppears,
+                                description: "The Light, Dark, and Auto appearance choices should appear.",
+                                element: ExpectedElement(labels: ["Dark"], role: "AXRadioButton")
+                            ),
+                            overlay: .spotlight,
+                            targetRole: "AXRow",
+                            canSkipIfNextVisible: true
+                        ),
+                        GuideRecipeStep(
+                            instruction: "Choose Dark.",
+                            targetAliases: ["Dark"],
+                            expectedOutcome: ExpectedOutcome(
+                                type: .visualChange,
+                                description: "Dark appearance should be selected.",
+                                element: ExpectedElement(
+                                    labels: ["Dark"], role: "AXRadioButton", value: "1"
+                                )
+                            ),
+                            overlay: .spotlight,
+                            targetRole: "AXRadioButton",
+                            alreadySatisfiedBy: ExpectedElement(
+                                labels: ["Dark"], role: "AXRadioButton", value: "1"
+                            )
+                        )
+                    ]
+                ),
+                ApplicationGuideRecipe(
                     id: "screen-recording-permission",
                     requestTerms: ["screen", "recording"],
                     minimumRequestTermMatches: 2,
@@ -312,10 +346,22 @@ struct ApplicationGuidePlanner: Sendable {
         }
 
         var index = completedCount
-        while index < recipe.steps.count,
-              let selector = recipe.steps[index].alreadySatisfiedBy,
-              matchesUnique(selector, in: request.scene) {
-            index += 1
+        while index < recipe.steps.count {
+            let candidate = recipe.steps[index]
+            if let selector = candidate.alreadySatisfiedBy,
+               matchesUnique(selector, in: request) {
+                index += 1
+                continue
+            }
+            // After skipping navigation, evaluate the newly selected step from the top
+            // of the loop as well. Its state may already satisfy the user's goal.
+            if candidate.canSkipIfNextVisible,
+               recipe.steps.indices.contains(index + 1),
+               match(step: recipe.steps[index + 1], request: request) != nil {
+                index += 1
+                continue
+            }
+            break
         }
         guard index < recipe.steps.count else {
             // Every remaining step is already satisfied, so the task is done.
@@ -326,13 +372,7 @@ struct ApplicationGuidePlanner: Sendable {
                 taskComplete: true
             )
         }
-        var step = recipe.steps[index]
-        // Only navigation can be skipped, and only when its next control is already visible.
-        if step.canSkipIfNextVisible, recipe.steps.indices.contains(index + 1),
-           match(step: recipe.steps[index + 1], request: request) != nil {
-            index += 1
-            step = recipe.steps[index]
-        }
+        let step = recipe.steps[index]
         guard let selected = match(step: step, request: request) else {
             // Before the recipe has committed to anything, an unmatched control usually
             // means a localized or restructured interface, not a stuck task. Defer to the
@@ -347,21 +387,55 @@ struct ApplicationGuidePlanner: Sendable {
             message: step.instruction,
             action: SuggestedAction(type: .pointToElement, targetElementId: selected.id,
                 targetBounds: nil, overlay: step.overlay),
-            expectedOutcome: step.expectedOutcome, taskComplete: false
+            expectedOutcome: step.expectedOutcome,
+            taskComplete: false,
+            completesTaskAfterSuccess: index == recipe.steps.index(before: recipe.steps.endIndex)
         )
     }
 
-    private func matchesUnique(_ selector: ExpectedElement, in scene: ScreenScene) -> Bool {
-        SceneIdentity.elements(in: scene, windowID: scene.activeWindow?.id)
-            .filter { $0.enabled && selector.matches($0) }.count == 1
+    private func matchesUnique(_ selector: ExpectedElement, in request: InstructorRequest) -> Bool {
+        SceneIdentity.elements(in: request.scene, windowID: request.scene.activeWindow?.id)
+            .filter {
+                $0.enabled && selector.matches(elementForMatching($0, request: request))
+            }
+            .count == 1
     }
 
     private func match(step: GuideRecipeStep, request: InstructorRequest) -> UIElementDescriptor? {
-        if let prerequisite = step.prerequisite, !matchesUnique(prerequisite, in: request.scene) { return nil }
+        if let prerequisite = step.prerequisite, !matchesUnique(prerequisite, in: request) { return nil }
         let selector = ExpectedElement(labels: step.targetAliases, role: step.targetRole)
         let elements = SceneIdentity.elements(in: request.scene, windowID: request.scene.activeWindow?.id)
-            .filter { $0.enabled && $0.bounds?.isValid == true && selector.matches($0) }
+            .filter {
+                $0.enabled && $0.bounds?.isValid == true
+                    && selector.matches(elementForMatching($0, request: request))
+            }
         guard elements.count == 1 else { return nil }
         return elements.first
+    }
+
+    /// Local OCR can label an otherwise unlabelled SwiftUI Accessibility row. The
+    /// Set-of-Marks builder keeps that label attached to the stable AX element ID; recipes
+    /// consume the same local fusion instead of dropping to a generic model step.
+    private func elementForMatching(
+        _ element: UIElementDescriptor,
+        request: InstructorRequest
+    ) -> UIElementDescriptor {
+        guard !element.hasExplicitLabel,
+              let mark = request.setOfMarks.first(where: {
+                  $0.elementID == element.id && $0.visualElementID != nil
+              }) else { return element }
+        return UIElementDescriptor(
+            id: element.id,
+            role: element.role,
+            subrole: element.subrole,
+            label: mark.label,
+            title: element.title,
+            value: element.value,
+            enabled: element.enabled,
+            focused: element.focused,
+            bounds: element.bounds,
+            windowID: element.windowID,
+            selected: element.selected
+        )
     }
 }

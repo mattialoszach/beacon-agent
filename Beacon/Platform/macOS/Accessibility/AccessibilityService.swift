@@ -190,7 +190,8 @@ struct AccessibilityService: Sendable {
                 enabled: boolAttribute(kAXEnabledAttribute, in: values) ?? true,
                 focused: boolAttribute(kAXFocusedAttribute, in: values) ?? false,
                 bounds: normalizedBounds,
-                windowID: owningWindowID
+                windowID: owningWindowID,
+                selected: boolAttribute(kAXSelectedAttribute, in: values)
             ))
         }
 
@@ -317,7 +318,7 @@ struct AccessibilityService: Sendable {
         kAXRoleAttribute, kAXSubroleAttribute, kAXDescriptionAttribute, kAXHelpAttribute,
         "AXLabel", kAXTitleAttribute, kAXValueAttribute, kAXEnabledAttribute,
         kAXFocusedAttribute, kAXHiddenAttribute, kAXPositionAttribute, kAXSizeAttribute,
-        kAXIdentifierAttribute, kAXChildrenAttribute
+        kAXIdentifierAttribute, kAXChildrenAttribute, kAXSelectedAttribute
     ]
 }
 

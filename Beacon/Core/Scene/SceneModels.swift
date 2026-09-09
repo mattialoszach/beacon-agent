@@ -43,6 +43,18 @@ struct UIElementDescriptor: Identifiable, Codable, Equatable, Hashable, Sendable
     let bounds: NormalizedRect?
 
     var windowID: String? = nil
+    /// Some applications keep menu descendants in the Accessibility tree even while
+    /// their parent menu is closed. AXSelected on the menu-bar item is therefore a more
+    /// reliable menu-open signal than element appearance alone.
+    var selected: Bool? = nil
+
+    /// AXValue is useful state but is not a semantic label. Controls such as radio
+    /// buttons commonly expose only `0`/`1` here and still need a local OCR label.
+    var hasExplicitLabel: Bool {
+        [label, title]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .contains { !$0.isEmpty }
+    }
 
     var bestLabel: String {
         [label, title, value]

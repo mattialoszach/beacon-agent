@@ -43,15 +43,17 @@ struct OverlayCanvasView: View {
     func fadeRegions(in availableSize: CGSize) -> [CGRect] {
         guard let targetRect else { return [] }
         var regions = [targetRect.insetBy(dx: -18, dy: -18)]
-        regions.append(
-            InstructionCalloutGeometry.layout(
-                text: presentation.instruction,
-                target: targetRect,
-                availableSize: availableSize
-            ).frame.insetBy(dx: -8, dy: -8)
+        let callout = InstructionCalloutGeometry.layout(
+            text: presentation.instruction,
+            target: targetRect,
+            availableSize: availableSize
         )
-        if presentation.style == .arrow,
-           let arrow = GuidanceArrowGeometry.layout(target: targetRect, availableSize: availableSize) {
+        regions.append(callout.frame.insetBy(dx: -8, dy: -8))
+        if let arrow = GuidanceArrowGeometry.layout(
+            target: targetRect,
+            availableSize: availableSize,
+            preferredSide: callout.preferredArrowSide(relativeTo: targetRect)
+        ) {
             regions.append(arrow.hoverBounds)
         }
         return regions
@@ -164,19 +166,26 @@ private struct OverlayContentView: View, Equatable {
             }
 
             if let targetRect {
+                let callout = InstructionCalloutGeometry.layout(
+                    text: presentation.instruction,
+                    target: targetRect,
+                    availableSize: availableSize
+                )
                 TargetHighlight(style: presentation.style)
                     .frame(width: max(12, targetRect.width), height: max(12, targetRect.height))
                     .position(x: targetRect.midX, y: targetRect.midY)
+
+                GuidanceArrow(
+                    target: targetRect,
+                    availableSize: availableSize,
+                    preferredSide: callout.preferredArrowSide(relativeTo: targetRect)
+                )
 
                 InstructionCallout(
                     text: presentation.instruction,
                     target: targetRect,
                     availableSize: availableSize
                 )
-
-                if presentation.style == .arrow {
-                    GuidanceArrow(target: targetRect, availableSize: availableSize)
-                }
             }
 
             ForEach(presentation.debugElements) { element in
@@ -195,14 +204,18 @@ private struct OverlayContentView: View, Equatable {
 }
 
 private struct GuidanceArrow: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     let target: CGRect
     let availableSize: CGSize
+    let preferredSide: GuidanceArrowGeometry.Side
 
     var body: some View {
         Canvas { context, _ in
             guard let geometry = GuidanceArrowGeometry.layout(
                 target: target,
-                availableSize: availableSize
+                availableSize: availableSize,
+                preferredSide: preferredSide
             ) else {
                 return
             }
@@ -212,12 +225,12 @@ private struct GuidanceArrow: View {
             shaft.addQuadCurve(to: geometry.end, control: geometry.control)
             context.stroke(
                 shaft,
-                with: .color(.black.opacity(0.22)),
+                with: .color(colorScheme == .dark ? .white.opacity(0.24) : .black.opacity(0.22)),
                 style: StrokeStyle(lineWidth: 9, lineCap: .round)
             )
             context.stroke(
                 shaft,
-                with: .color(BeaconPalette.blueViolet),
+                with: .color(colorScheme == .dark ? BeaconPalette.plum : BeaconPalette.blueViolet),
                 style: StrokeStyle(lineWidth: 5, lineCap: .round)
             )
 
@@ -239,12 +252,12 @@ private struct GuidanceArrow: View {
             ))
             context.stroke(
                 head,
-                with: .color(.black.opacity(0.22)),
+                with: .color(colorScheme == .dark ? .white.opacity(0.24) : .black.opacity(0.22)),
                 style: StrokeStyle(lineWidth: 9, lineCap: .round, lineJoin: .round)
             )
             context.stroke(
                 head,
-                with: .color(BeaconPalette.blueViolet),
+                with: .color(colorScheme == .dark ? BeaconPalette.plum : BeaconPalette.blueViolet),
                 style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round)
             )
         }
@@ -284,7 +297,8 @@ struct GuidanceArrowGeometry: Equatable {
         availableSize: CGSize,
         margin: CGFloat = 22,
         targetGap: CGFloat = 9,
-        preferredLength: CGFloat = 78
+        preferredLength: CGFloat = 78,
+        preferredSide: Side? = nil
     ) -> GuidanceArrowGeometry? {
         guard availableSize.width.isFinite,
               availableSize.height.isFinite,
@@ -305,7 +319,10 @@ struct GuidanceArrowGeometry: Equatable {
             (.bottom, availableSize.height - margin - visibleTarget.maxY),
             (.left, visibleTarget.minX - margin)
         ]
-        guard let placement = clearances.max(by: { $0.1 < $1.1 }),
+        let preferredPlacement = preferredSide.flatMap { preferred in
+            clearances.first { $0.0 == preferred && $0.1 >= targetGap + 20 }
+        }
+        guard let placement = preferredPlacement ?? clearances.max(by: { $0.1 < $1.1 }),
               placement.1 >= targetGap + 20 else { return nil }
 
         let shaftLength = min(preferredLength, placement.1 - targetGap)
@@ -366,6 +383,10 @@ struct InstructionCalloutGeometry: Equatable {
         )
     }
 
+    func preferredArrowSide(relativeTo target: CGRect) -> GuidanceArrowGeometry.Side {
+        position.y < target.midY ? .top : .bottom
+    }
+
     static func layout(
         text: String,
         target: CGRect,
@@ -413,6 +434,8 @@ private struct TargetHighlight: View {
 }
 
 private struct InstructionCallout: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     let text: String
     let target: CGRect
     let availableSize: CGSize
@@ -425,21 +448,36 @@ private struct InstructionCallout: View {
         )
     }
 
+    private var instructionColor: Color {
+        colorScheme == .dark ? BeaconPalette.plum : BeaconPalette.blueViolet
+    }
+
+    private var directionIcon: String {
+        geometry.position.y < target.midY ? "arrow.down.circle.fill" : "arrow.up.circle.fill"
+    }
+
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: "arrow.up.left")
-                .foregroundStyle(BeaconPalette.blueViolet)
+            Image(systemName: directionIcon)
+                .foregroundStyle(instructionColor)
             Text(text)
                 .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(instructionColor)
                 .fixedSize(horizontal: false, vertical: true)
                 .multilineTextAlignment(.leading)
         }
-        .foregroundStyle(.primary)
         .padding(.horizontal, 13)
         .padding(.vertical, 10)
         .frame(width: geometry.width, alignment: .leading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.2)))
+        .background(
+            BeaconPalette.lavender.opacity(colorScheme == .dark ? 0.05 : 0.12),
+            in: RoundedRectangle(cornerRadius: 12)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(BeaconPalette.blueViolet.opacity(0.28))
+        )
         .shadow(radius: 12)
         .position(geometry.position)
     }

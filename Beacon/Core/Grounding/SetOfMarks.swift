@@ -32,28 +32,38 @@ struct SetOfMarksBuilder: Sendable {
         // Relevance scoring tokenizes both strings, so it is computed once per element
         // rather than inside the comparator, where a large tree would run it thousands
         // of times.
-        let accessible = scene.elements
+        let visibleVisualElements = scene.visualElements.filter { element in
+            element.bounds.isValid
+                && viewport.map { visible($0, contains: element.bounds) } != false
+        }
+        let visibleAccessibilityElements = scene.elements
             .filter { element in
                 guard element.enabled, let bounds = element.bounds, bounds.isValid else { return false }
                 return viewport.map { visible($0, contains: bounds) } != false
             }
+        let fusedVisualElements = fusedVisualElements(
+            for: visibleAccessibilityElements,
+            from: visibleVisualElements
+        )
+        let accessible = visibleAccessibilityElements
             .map { element in
-                (
+                let fusedVisual = fusedVisualElements[element.id]
+                let label = fusedVisual?.bestLabel ?? element.bestLabel
+                return (
                     element: element,
+                    label: label,
+                    fusedVisualElementID: fusedVisual?.id,
                     score: query.map {
-                        SemanticElementMatcher.relevanceScore(query: $0, candidate: element.bestLabel)
+                        SemanticElementMatcher.relevanceScore(query: $0, candidate: label)
                     } ?? 0
                 )
             }
             .sorted { accessibilityOrder($0, $1) }
-            .map(\.element)
 
-        let accessibilityBounds = accessible.compactMap(\.bounds)
-        let visual = scene.visualElements
+        let accessibilityBounds = accessible.compactMap(\.element.bounds)
+        let visual = visibleVisualElements
             .filter { element in
-                element.bounds.isValid
-                    && viewport.map { visible($0, contains: element.bounds) } != false
-                    && !accessibilityBounds.contains(where: { overlapRatio($0, element.bounds) > 0.58 })
+                !accessibilityBounds.contains(where: { overlapRatio($0, element.bounds) > 0.58 })
             }
             .map { (element: $0, score: queryPriority(for: $0, query: query)) }
             .sorted { visualOrder($0, $1) }
@@ -77,14 +87,14 @@ struct SetOfMarksBuilder: Sendable {
             selectedVisual += visual.dropFirst(selectedVisual.count).prefix(remaining)
         }
 
-        let accessibilityMarks = selectedAccessibility.compactMap { element -> SetOfMark? in
-            guard let bounds = element.bounds else { return nil }
+        let accessibilityMarks = selectedAccessibility.compactMap { candidate -> SetOfMark? in
+            guard let bounds = candidate.element.bounds else { return nil }
             return SetOfMark(
                 id: 0,
-                elementID: element.id,
-                visualElementID: nil,
+                elementID: candidate.element.id,
+                visualElementID: candidate.fusedVisualElementID,
                 bounds: bounds,
-                label: element.bestLabel,
+                label: candidate.label,
                 source: .accessibility,
                 visualKind: nil
             )
@@ -114,18 +124,60 @@ struct SetOfMarksBuilder: Sendable {
     }
 
     private func accessibilityOrder(
-        _ lhs: (element: UIElementDescriptor, score: Double),
-        _ rhs: (element: UIElementDescriptor, score: Double)
+        _ lhs: (element: UIElementDescriptor, label: String, fusedVisualElementID: String?, score: Double),
+        _ rhs: (element: UIElementDescriptor, label: String, fusedVisualElementID: String?, score: Double)
     ) -> Bool {
         if lhs.score != rhs.score { return lhs.score > rhs.score }
         if lhs.element.focused != rhs.element.focused { return lhs.element.focused }
-        let lhsLabelled = lhs.element.bestLabel != "Unlabelled control"
-        let rhsLabelled = rhs.element.bestLabel != "Unlabelled control"
+        let lhsLabelled = lhs.label != "Unlabelled control"
+        let rhsLabelled = rhs.label != "Unlabelled control"
         if lhsLabelled != rhsLabelled { return lhsLabelled }
         let lhsArea = lhs.element.bounds.map { $0.width * $0.height } ?? 0
         let rhsArea = rhs.element.bounds.map { $0.width * $0.height } ?? 0
         if lhsArea != rhsArea { return lhsArea > rhsArea }
         return lhs.element.id < rhs.element.id
+    }
+
+    /// SwiftUI controls can expose an actionable AXRow with no label while its visible
+    /// child text is available only through OCR. Keep the stable AX target and attach the
+    /// best overlapping OCR label instead of discarding that text as a duplicate.
+    private func fusedVisualElements(
+        for elements: [UIElementDescriptor],
+        from visualElements: [VisualElementDescriptor]
+    ) -> [String: VisualElementDescriptor] {
+        let unlabeled = elements.filter {
+            !$0.hasExplicitLabel && $0.bounds?.isValid == true
+        }
+        guard !unlabeled.isEmpty else { return [:] }
+
+        var assigned: [String: [VisualElementDescriptor]] = [:]
+        for visual in visualElements where visual.kind == .text
+            && !visual.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            // Associate each OCR label with the smallest containing actionable target.
+            // This avoids copying one row label onto both a nested control and its parent.
+            let owner = unlabeled
+                .filter { element in
+                    guard let bounds = element.bounds else { return false }
+                    return contains(bounds, point: visual.bounds.center)
+                        && coverage(of: visual.bounds, by: bounds) > 0.58
+                }
+                .min { lhs, rhs in
+                    let lhsArea = lhs.bounds.map { $0.width * $0.height } ?? .greatestFiniteMagnitude
+                    let rhsArea = rhs.bounds.map { $0.width * $0.height } ?? .greatestFiniteMagnitude
+                    return lhsArea == rhsArea ? lhs.id < rhs.id : lhsArea < rhsArea
+                }
+            if let owner { assigned[owner.id, default: []].append(visual) }
+        }
+
+        return assigned.reduce(into: [:]) { result, entry in
+            let best = entry.value.sorted {
+                if $0.confidence != $1.confidence { return $0.confidence > $1.confidence }
+                if $0.bounds.height != $1.bounds.height { return $0.bounds.height > $1.bounds.height }
+                return $0.id < $1.id
+            }
+            .first
+            if let best { result[entry.key] = best }
+        }
     }
 
     private func visualOrder(
@@ -173,6 +225,24 @@ struct SetOfMarksBuilder: Sendable {
         let intersectionHeight = max(0, min(lhs.y + lhs.height, rhs.y + rhs.height) - max(lhs.y, rhs.y))
         let intersection = intersectionWidth * intersectionHeight
         return intersection / max(0.000_000_1, min(lhs.width * lhs.height, rhs.width * rhs.height))
+    }
+
+    private func coverage(of inner: NormalizedRect, by outer: NormalizedRect) -> Double {
+        let intersectionWidth = max(
+            0,
+            min(inner.x + inner.width, outer.x + outer.width) - max(inner.x, outer.x)
+        )
+        let intersectionHeight = max(
+            0,
+            min(inner.y + inner.height, outer.y + outer.height) - max(inner.y, outer.y)
+        )
+        return intersectionWidth * intersectionHeight
+            / max(0.000_000_1, inner.width * inner.height)
+    }
+
+    private func contains(_ rect: NormalizedRect, point: NormalizedPoint) -> Bool {
+        point.x >= rect.x && point.x <= rect.x + rect.width
+            && point.y >= rect.y && point.y <= rect.y + rect.height
     }
 }
 

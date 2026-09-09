@@ -1,4 +1,5 @@
 import CoreGraphics
+import ApplicationServices
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
@@ -84,11 +85,561 @@ final class BeaconControllerLifecycleTests: XCTestCase {
     }
 
     func testProviderFailureFallsBackLocally() async {
+        let scene = largeInspectorScene()
+        let question = "What is this interface?"
+        let contexts = inspectorContexts(question: question, mode: .ask, scene: scene)
+        XCTAssertNotEqual(contexts.provider, contexts.local)
+        XCTAssertTrue(contexts.provider.contains("[element-069"))
+        XCTAssertFalse(contexts.local.contains("[element-069"))
         let controller = makeController(model: FailingModel())
-        await controller.run(question: "Explain", mode: .ask, initialScene: fixture())
+
+        await controller.run(question: question, mode: .ask, initialScene: scene)
+
         XCTAssertEqual(controller.state, .completed)
         XCTAssertNotNil(controller.currentResponse)
+        XCTAssertEqual(controller.modelContextPreview, contexts.provider)
         XCTAssertTrue(controller.errorMessage?.contains("Using local") == true)
+        controller.cancel()
+    }
+
+    func testTargetlessIncompleteGuideFallsBackToLocalPointingStep() async {
+        let scene = largeInspectorScene(targetLabel: "Export")
+        let question = "Where is Export?"
+        let contexts = inspectorContexts(question: question, mode: .guide, scene: scene)
+        XCTAssertNotEqual(contexts.provider, contexts.local)
+        let response = InstructorResponse(
+            message: "Export is somewhere in this window.",
+            action: nil,
+            expectedOutcome: nil,
+            taskComplete: false
+        )
+        let controller = makeController(
+            model: FixedModel(id: "OpenAI", response: response),
+            captureScene: { scene }
+        )
+
+        await controller.run(question: question, mode: .guide, initialScene: scene)
+
+        XCTAssertEqual(controller.currentResponse?.action?.targetElementId, "element-069")
+        XCTAssertEqual(controller.state, .waitingForChange)
+        XCTAssertNil(controller.confirmationMessage)
+        XCTAssertEqual(controller.modelContextPreview, contexts.provider)
+        XCTAssertTrue(controller.errorMessage?.contains("Using local Accessibility matching") == true)
+        controller.cancel()
+    }
+
+    func testTargetlessIncompleteGuideFailsInsteadOfBecomingAnAnswer() async {
+        let response = InstructorResponse(
+            message: "Reveal the next control.",
+            action: nil,
+            expectedOutcome: nil,
+            taskComplete: false
+        )
+        let controller = makeController(model: FixedModel(response: response))
+
+        await controller.run(question: "Finish this task", mode: .guide, initialScene: fixture())
+
+        XCTAssertEqual(controller.state, .failed)
+        XCTAssertNil(controller.currentResponse)
+        XCTAssertTrue(controller.history.isEmpty)
+        XCTAssertTrue(controller.errorMessage?.contains("safe on-screen target") == true)
+        XCTAssertNotEqual(controller.statusMessage, "Answered")
+        controller.cancel()
+    }
+
+    func testContradictoryGuideCompletionFieldsCannotStopEarly() async {
+        let responses = [
+            InstructorResponse(
+                message: "Click this even though the task is already done.",
+                action: SuggestedAction(
+                    type: .pointToElement,
+                    targetElementId: "missing",
+                    targetBounds: nil,
+                    overlay: .spotlight
+                ),
+                expectedOutcome: nil,
+                taskComplete: true
+            ),
+            InstructorResponse(
+                message: "This missing action will finish the task.",
+                action: nil,
+                expectedOutcome: nil,
+                taskComplete: false,
+                completesTaskAfterSuccess: true
+            ),
+            InstructorResponse(
+                message: "Complete, but not complete.",
+                action: SuggestedAction(
+                    type: .complete,
+                    targetElementId: nil,
+                    targetBounds: nil,
+                    overlay: .spotlight
+                ),
+                expectedOutcome: nil,
+                taskComplete: false
+            )
+        ]
+
+        for response in responses {
+            let controller = makeController(model: FixedModel(response: response))
+
+            await controller.run(
+                question: "Finish this task",
+                mode: .guide,
+                initialScene: fixture()
+            )
+
+            XCTAssertEqual(controller.state, .failed)
+            XCTAssertFalse(controller.history.contains { $0.succeeded == true })
+            controller.cancel()
+        }
+    }
+
+    func testTargetlessAskResponseRemainsAnInformationalAnswer() async {
+        let response = InstructorResponse(
+            message: "This window contains export options.",
+            action: nil,
+            expectedOutcome: nil,
+            taskComplete: false
+        )
+        let controller = makeController(model: FixedModel(response: response))
+
+        await controller.run(question: "What is this window?", mode: .ask, initialScene: fixture())
+
+        XCTAssertEqual(controller.state, .completed)
+        XCTAssertEqual(controller.statusMessage, "Answered")
+        XCTAssertEqual(controller.currentResponse?.message, response.message)
+        controller.cancel()
+    }
+
+    func testConfirmedFinalActionCompletesWithoutAnotherModelCall() async {
+        let target = UIElementDescriptor(
+            id: "target", role: "AXButton", subrole: nil, label: "Finish", title: nil,
+            value: nil, enabled: true, focused: false,
+            bounds: .init(x: 0.1, y: 0.1, width: 0.1, height: 0.05)
+        )
+        let scene = ScreenScene(
+            timestamp: Date(), activeApplication: fixture().activeApplication,
+            activeWindow: nil, screenshot: nil, elements: [target], displays: []
+        )
+        let model = FinalGuideModel()
+        let controller = makeController(model: model, captureScene: { scene })
+
+        await controller.run(question: "Finish this task", mode: .guide, initialScene: scene)
+        XCTAssertEqual(controller.state, .awaitingConfirmation)
+        XCTAssertEqual(controller.currentResponse?.completesTaskAfterSuccess, true)
+
+        await controller.confirmResult(succeeded: true)
+
+        XCTAssertEqual(controller.state, .completed)
+        XCTAssertEqual(model.requests.count, 1)
+        XCTAssertEqual(controller.history.first?.succeeded, true)
+        controller.cancel()
+    }
+
+    func testAutomaticallyVerifiedFinalActionCompletesWithoutAnotherModelCall() async throws {
+        func scene(value: String) -> ScreenScene {
+            ScreenScene(
+                timestamp: Date(), activeApplication: fixture().activeApplication,
+                activeWindow: nil, screenshot: nil,
+                elements: [
+                    UIElementDescriptor(
+                        id: "target", role: "AXCheckBox", subrole: nil,
+                        label: "Finish", title: nil, value: value,
+                        enabled: true, focused: false,
+                        bounds: .init(x: 0.1, y: 0.1, width: 0.1, height: 0.05)
+                    )
+                ],
+                displays: []
+            )
+        }
+        let before = scene(value: "0")
+        let after = scene(value: "1")
+        var current = before
+        let events = AsyncStream<AccessibilityChangeEvent>.makeStream()
+        defer { events.continuation.finish() }
+        let model = FinalGuideModel(expectedOutcome: ExpectedOutcome(
+            type: .visualChange,
+            description: "Finish is enabled.",
+            element: ExpectedElement(labels: ["Finish"], role: "AXCheckBox", value: "1")
+        ))
+        let controller = makeController(
+            model: model,
+            captureScene: { current },
+            observationEvents: { _, _ in events.stream }
+        )
+
+        await controller.run(question: "Finish this task", mode: .guide, initialScene: before)
+        XCTAssertEqual(controller.state, .waitingForChange)
+        current = after
+        events.continuation.yield(.fallbackTimer)
+        try await waitUntil { controller.state == .completed }
+
+        XCTAssertEqual(model.requests.count, 1)
+        XCTAssertEqual(controller.history.first?.succeeded, true)
+        controller.cancel()
+    }
+
+    func testProfileGuideFollowsOpenedAccountMenuAndPointsToNextControl() async throws {
+        let profile = UIElementDescriptor(
+            id: "profile", role: "AXButton", subrole: nil, label: "Google Account profile picture",
+            title: nil, value: nil, enabled: true, focused: false,
+            bounds: .init(x: 0.88, y: 0.04, width: 0.05, height: 0.05)
+        )
+        let manageAccount = UIElementDescriptor(
+            id: "manage-account", role: "AXButton", subrole: nil,
+            label: "Manage your Google Account", title: nil, value: nil,
+            enabled: true, focused: false,
+            bounds: .init(x: 0.7, y: 0.12, width: 0.22, height: 0.06)
+        )
+        func scene(elements: [UIElementDescriptor]) -> ScreenScene {
+            ScreenScene(
+                timestamp: Date(),
+                activeApplication: .init(
+                    name: "Google Chrome",
+                    bundleIdentifier: "com.google.Chrome",
+                    processIdentifier: 42
+                ),
+                activeWindow: .init(title: "Google", bounds: nil, id: "browser"),
+                screenshot: nil,
+                elements: elements,
+                displays: []
+            )
+        }
+        let before = scene(elements: [profile])
+        let after = scene(elements: [profile, manageAccount])
+        var current = before
+        let events = AsyncStream<AccessibilityChangeEvent>.makeStream()
+        defer { events.continuation.finish() }
+        let model = ProfileNavigationModel()
+        let controller = makeController(
+            model: model,
+            captureScene: { current },
+            observationEvents: { _, _ in events.stream }
+        )
+
+        await controller.run(
+            question: "Where can I change my profile picture?",
+            mode: .guide,
+            initialScene: before
+        )
+        XCTAssertEqual(controller.state, .waitingForChange)
+        XCTAssertEqual(controller.currentResponse?.action?.targetElementId, profile.id)
+        XCTAssertNil(controller.confirmationMessage)
+
+        current = after
+        events.continuation.yield(.fallbackTimer)
+        try await waitUntil {
+            controller.currentResponse?.action?.targetElementId == manageAccount.id
+                && controller.state == .waitingForChange
+        }
+
+        XCTAssertEqual(model.requests.count, 2)
+        XCTAssertEqual(model.requests.last?.guideContext?.completedSteps.count, 1)
+        XCTAssertNil(controller.confirmationMessage)
+        controller.cancel()
+    }
+
+    func testProfileGuideDoesNotAdvanceForFocusOnlyNoise() async throws {
+        func scene(focused: Bool) -> ScreenScene {
+            ScreenScene(
+                timestamp: Date(),
+                activeApplication: .init(
+                    name: "Google Chrome",
+                    bundleIdentifier: "com.google.Chrome",
+                    processIdentifier: 42
+                ),
+                activeWindow: .init(title: "Google", bounds: nil, id: "browser"),
+                screenshot: nil,
+                elements: [
+                    UIElementDescriptor(
+                        id: "profile", role: "AXButton", subrole: nil,
+                        label: "Google Account profile picture", title: nil, value: nil,
+                        enabled: true, focused: focused,
+                        bounds: .init(x: 0.88, y: 0.04, width: 0.05, height: 0.05)
+                    )
+                ],
+                displays: []
+            )
+        }
+        let before = scene(focused: false)
+        var current = before
+        let events = AsyncStream<AccessibilityChangeEvent>.makeStream()
+        defer { events.continuation.finish() }
+        let model = ProfileNavigationModel()
+        let controller = makeController(
+            model: model,
+            captureScene: { current },
+            observationEvents: { _, _ in events.stream }
+        )
+
+        await controller.run(
+            question: "Where can I change my profile picture?",
+            mode: .guide,
+            initialScene: before
+        )
+        current = scene(focused: true)
+        events.continuation.yield(.fallbackTimer)
+        try await Task.sleep(for: .milliseconds(80))
+
+        XCTAssertEqual(controller.state, .waitingForChange)
+        XCTAssertEqual(model.requests.count, 1)
+        XCTAssertEqual(controller.currentResponse?.action?.targetElementId, "profile")
+        controller.cancel()
+    }
+
+    func testVSCodeCodeMenuOpeningAdvancesWhenAccessibilityTreeIsStatic() async throws {
+        let codeMenu = UIElementDescriptor(
+            id: "code-menu", role: "AXMenuBarItem", subrole: nil, label: "Code",
+            title: nil, value: nil, enabled: true, focused: false,
+            bounds: .init(x: 0.01, y: 0, width: 0.04, height: 0.03)
+        )
+        // Electron can expose this descendant before its menu is visibly open. That
+        // makes elementAppears verification inconclusive even though the user clicked
+        // the highlighted Code menu.
+        let settings = UIElementDescriptor(
+            id: "settings-menu", role: "AXMenuItem", subrole: nil, label: "Settings",
+            title: nil, value: nil, enabled: true, focused: false,
+            bounds: .init(x: 0.01, y: 0.04, width: 0.16, height: 0.04)
+        )
+        let unchangedScene = ScreenScene(
+            timestamp: Date(),
+            activeApplication: .init(
+                name: "Visual Studio Code",
+                bundleIdentifier: "com.microsoft.VSCode",
+                processIdentifier: 86
+            ),
+            activeWindow: .init(title: "Beacon — Visual Studio Code", bounds: nil, id: "editor"),
+            screenshot: nil,
+            elements: [codeMenu, settings],
+            displays: []
+        )
+        let events = AsyncStream<AccessibilityChangeEvent>.makeStream()
+        defer { events.continuation.finish() }
+        let model = VSCodeThemeNavigationModel()
+        let controller = makeController(
+            model: model,
+            captureScene: { unchangedScene },
+            observationEvents: { _, _ in events.stream }
+        )
+
+        await controller.run(
+            question: "How can I change my VSCode theme?",
+            mode: .guide,
+            initialScene: unchangedScene
+        )
+        XCTAssertEqual(controller.state, .waitingForChange)
+        XCTAssertEqual(controller.currentResponse?.action?.targetElementId, codeMenu.id)
+
+        events.continuation.yield(.notification(
+            name: kAXMenuOpenedNotification,
+            role: "AXMenu",
+            label: "File"
+        ))
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertEqual(model.requests.count, 1, "Opening another menu must not confirm Code")
+
+        events.continuation.yield(.notification(
+            name: kAXMenuOpenedNotification,
+            role: "AXMenu",
+            label: "Code"
+        ))
+        try await waitUntil {
+            controller.currentResponse?.action?.targetElementId == settings.id
+                && controller.state == .waitingForChange
+        }
+
+        XCTAssertEqual(model.requests.count, 2)
+        XCTAssertEqual(model.requests.last?.guideContext?.completedSteps.count, 1)
+        XCTAssertNil(controller.confirmationMessage)
+        controller.cancel()
+    }
+
+    func testRepeatedObservationCaptureFailuresStopInsteadOfWaitingIndefinitely() async throws {
+        let target = UIElementDescriptor(
+            id: "target", role: "AXButton", subrole: nil, label: "Profile", title: nil,
+            value: nil, enabled: true, focused: false,
+            bounds: .init(x: 0.8, y: 0.05, width: 0.08, height: 0.05)
+        )
+        let scene = ScreenScene(
+            timestamp: Date(),
+            activeApplication: fixture().activeApplication,
+            activeWindow: nil,
+            screenshot: nil,
+            elements: [target],
+            displays: []
+        )
+        var shouldFail = false
+        let events = AsyncStream<AccessibilityChangeEvent>.makeStream()
+        defer { events.continuation.finish() }
+        let controller = makeController(
+            model: FinalGuideModel(),
+            captureScene: {
+                if shouldFail { throw URLError(.cannotParseResponse) }
+                return scene
+            },
+            observationEvents: { _, _ in events.stream }
+        )
+
+        await controller.run(
+            question: "Where is my profile?",
+            mode: .guide,
+            initialScene: scene
+        )
+        XCTAssertEqual(controller.state, .waitingForChange)
+        shouldFail = true
+        for _ in 0..<3 { events.continuation.yield(.fallbackTimer) }
+        try await waitUntil { controller.state == .failed }
+
+        XCTAssertTrue(controller.statusMessage.contains("three attempts"))
+        XCTAssertFalse(controller.isObserving)
+        controller.cancel()
+    }
+
+    func testAccessibilityChangeUsesLocalOCRToVerifyAnUnlabelledAppearingControl() async throws {
+        let app = ApplicationDescriptor(
+            name: "System Settings",
+            bundleIdentifier: "com.apple.systempreferences",
+            processIdentifier: 123
+        )
+        let window = WindowDescriptor(title: "Appearance", bounds: nil, id: "settings")
+        let appearance = UIElementDescriptor(
+            id: "appearance", role: "AXRow", subrole: nil, label: "Appearance",
+            title: nil, value: nil, enabled: true, focused: false,
+            bounds: .init(x: 0.1, y: 0.1, width: 0.3, height: 0.08), windowID: "settings"
+        )
+        let darkBounds = NormalizedRect(x: 0.55, y: 0.2, width: 0.18, height: 0.08)
+        let dark = UIElementDescriptor(
+            id: "dark", role: "AXRadioButton", subrole: nil, label: nil,
+            title: nil, value: "0", enabled: true, focused: false,
+            bounds: darkBounds, windowID: "settings"
+        )
+        let before = ScreenScene(
+            timestamp: Date(), activeApplication: app, activeWindow: window,
+            screenshot: nil, elements: [appearance], displays: []
+        )
+        let after = ScreenScene(
+            timestamp: Date(), activeApplication: app, activeWindow: window,
+            screenshot: nil, elements: [appearance, dark], displays: []
+        )
+        var current = before
+        let events = AsyncStream<AccessibilityChangeEvent>.makeStream()
+        defer { events.continuation.finish() }
+        let captures = CaptureRecorder()
+        let response = InstructorResponse(
+            message: "Open Appearance.",
+            action: SuggestedAction(
+                type: .pointToElement,
+                targetElementId: appearance.id,
+                targetBounds: nil,
+                overlay: .spotlight
+            ),
+            expectedOutcome: ExpectedOutcome(
+                type: .elementAppears,
+                description: "The Dark appearance choice should appear.",
+                element: ExpectedElement(labels: ["Dark"], role: "AXRadioButton")
+            ),
+            taskComplete: false,
+            completesTaskAfterSuccess: true
+        )
+        let controller = makeController(
+            model: FixedModel(response: response),
+            captureScene: { current },
+            observationEvents: { _, _ in events.stream },
+            captureSnapshot: { _ in captures.snapshot() },
+            analyzeVisualContext: { _ in
+                [
+                    VisualElementDescriptor(
+                        id: "ocr_dark", text: "Dark",
+                        bounds: .init(x: 0.58, y: 0.22, width: 0.08, height: 0.03),
+                        confidence: 0.95, kind: .text
+                    )
+                ]
+            },
+            hasScreenCapturePermission: { true }
+        )
+
+        await controller.run(
+            question: "Open Appearance",
+            mode: .guide,
+            initialScene: before
+        )
+        XCTAssertEqual(controller.state, .waitingForChange)
+        XCTAssertEqual(captures.callCount, 0)
+
+        current = after
+        events.continuation.yield(.fallbackTimer)
+        try await waitUntil { controller.state == .completed }
+
+        XCTAssertEqual(captures.callCount, 1)
+        XCTAssertEqual(controller.history.first?.succeeded, true)
+        XCTAssertTrue(controller.currentScene?.visualElements.contains { $0.text == "Dark" } == true)
+        XCTAssertNil(controller.outboundImagePreview)
+        controller.cancel()
+    }
+
+    func testSystemSettingsReacquiresOCRForValueOnlyDarkAfterAppearanceCompletes() async throws {
+        let app = ApplicationDescriptor(
+            name: "System Settings",
+            bundleIdentifier: "com.apple.systempreferences",
+            processIdentifier: 123
+        )
+        let window = WindowDescriptor(title: "System Settings", bounds: nil, id: "settings")
+        let appearance = UIElementDescriptor(
+            id: "appearance", role: "AXRow", subrole: nil, label: "Appearance",
+            title: nil, value: nil, enabled: true, focused: false,
+            bounds: .init(x: 0.1, y: 0.1, width: 0.3, height: 0.08), windowID: "settings"
+        )
+        let dark = UIElementDescriptor(
+            id: "dark", role: "AXRadioButton", subrole: nil, label: nil,
+            title: nil, value: "0", enabled: true, focused: false,
+            bounds: .init(x: 0.55, y: 0.2, width: 0.18, height: 0.08), windowID: "settings"
+        )
+        let before = ScreenScene(
+            timestamp: Date(), activeApplication: app, activeWindow: window,
+            screenshot: nil, elements: [appearance], displays: []
+        )
+        let afterAppearance = ScreenScene(
+            timestamp: Date(), activeApplication: app, activeWindow: window,
+            screenshot: nil, elements: [appearance, dark], displays: []
+        )
+        var current = before
+        let events = AsyncStream<AccessibilityChangeEvent>.makeStream()
+        defer { events.continuation.finish() }
+        let captures = CaptureRecorder()
+        let controller = makeController(
+            captureScene: { current },
+            observationEvents: { _, _ in events.stream },
+            captureSnapshot: { _ in captures.snapshot() },
+            analyzeVisualContext: { _ in
+                [
+                    VisualElementDescriptor(
+                        id: "ocr_dark", text: "Dark",
+                        bounds: .init(x: 0.58, y: 0.22, width: 0.08, height: 0.03),
+                        confidence: 0.95, kind: .text
+                    )
+                ]
+            },
+            hasScreenCapturePermission: { true }
+        )
+
+        await controller.run(question: "Dark mode", mode: .guide, initialScene: before)
+        XCTAssertEqual(controller.currentResponse?.message, "Open Appearance.")
+        XCTAssertEqual(controller.state, .waitingForChange)
+        XCTAssertEqual(captures.callCount, 0)
+
+        current = afterAppearance
+        events.continuation.yield(.fallbackTimer)
+        try await waitUntil {
+            controller.currentResponse?.message == "Choose Dark."
+                && controller.state == .waitingForChange
+        }
+
+        XCTAssertEqual(controller.currentResponse?.action?.targetElementId, dark.id)
+        XCTAssertEqual(captures.callCount, 2)
+        XCTAssertEqual(controller.history.last?.succeeded, true)
+        XCTAssertTrue(controller.currentScene?.visualElements.contains { $0.text == "Dark" } == true)
+        XCTAssertNil(controller.outboundImagePreview)
         controller.cancel()
     }
 
@@ -424,12 +975,17 @@ final class BeaconControllerLifecycleTests: XCTestCase {
     private func makeController(
         model: (any InstructorModel)? = nil,
         captureScene: (@MainActor () async throws -> ScreenScene)? = nil,
-        observationEvents: ((Int32, TimeInterval) -> AsyncStream<AccessibilityChangeEvent>)? = nil
+        observationEvents: ((Int32, TimeInterval) -> AsyncStream<AccessibilityChangeEvent>)? = nil,
+        captureSnapshot: (@MainActor (CGPoint?) async throws -> ScreenSnapshot)? = nil,
+        analyzeVisualContext: @escaping @Sendable (ScreenSnapshot) async throws -> [VisualElementDescriptor] = {
+            try await VisionSceneAnalyzer().analyze(snapshot: $0)
+        },
+        hasScreenCapturePermission: @escaping () -> Bool = { false }
     ) -> BeaconController {
         let suite = "BeaconControllerLifecycleTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
-        return BeaconController(
+        let controller = BeaconController(
             privacySettings: PrivacySettingsStore(defaults: defaults),
             modelSettings: ModelConfigurationStore(
                 defaults: defaults,
@@ -438,14 +994,64 @@ final class BeaconControllerLifecycleTests: XCTestCase {
             captureScene: captureScene,
             model: model,
             observationEvents: observationEvents ?? { _, _ in AsyncStream { _ in } },
-            hasScreenCapturePermission: { false }
+            captureSnapshot: captureSnapshot,
+            analyzeVisualContext: analyzeVisualContext,
+            hasScreenCapturePermission: hasScreenCapturePermission,
+            presentsUserInterface: false
         )
+        addTeardownBlock { @MainActor in controller.cancel() }
+        return controller
     }
 
     private func fixture() -> ScreenScene {
         ScreenScene(timestamp: Date(), activeApplication: .init(
             name: "Fixture", bundleIdentifier: "test.fixture", processIdentifier: 123
         ), activeWindow: nil, screenshot: nil, elements: [], displays: [])
+    }
+
+    private func largeInspectorScene(targetLabel: String? = nil) -> ScreenScene {
+        let elements = (0..<70).map { index in
+            UIElementDescriptor(
+                id: String(format: "element-%03d", index),
+                role: "AXButton",
+                subrole: nil,
+                label: index == 69 ? targetLabel ?? "Control 069" : String(format: "Control %03d", index),
+                title: nil,
+                value: nil,
+                enabled: true,
+                focused: false,
+                bounds: .init(x: 0.1, y: 0.1, width: 0.1, height: 0.05)
+            )
+        }
+        return ScreenScene(
+            timestamp: Date(),
+            activeApplication: fixture().activeApplication,
+            activeWindow: nil,
+            screenshot: nil,
+            elements: elements,
+            displays: []
+        )
+    }
+
+    private func inspectorContexts(
+        question: String,
+        mode: InteractionMode,
+        scene: ScreenScene
+    ) -> (provider: String, local: String) {
+        var request = InstructorRequest(question: question, scene: scene, mode: mode)
+        if mode == .guide {
+            request.guideContext = GuideContext(
+                stepNumber: 1,
+                maximumSteps: 8,
+                completedSteps: []
+            )
+        }
+        request.setOfMarks = SetOfMarksBuilder().build(scene: scene, query: question)
+        return (
+            ModelContextBuilder(maximumElements: 100, maximumCharacters: 12_000)
+                .build(for: request).userPrompt,
+            ModelContextBuilder().build(for: request).userPrompt
+        )
     }
 }
 
@@ -466,7 +1072,7 @@ private final class NavigationModel: InstructorModel {
 }
 
 private struct FailingModel: InstructorModel {
-    let id = "Unavailable provider"
+    let id = "OpenAI"
     let capabilities: ModelCapabilities = [.text]
 
     func reason(request: InstructorRequest) async throws -> InstructorResponse {
@@ -512,9 +1118,15 @@ private actor ResponseGate {
 }
 
 private struct FixedModel: InstructorModel {
-    let id = "Fixture"
+    let id: String
     let capabilities: ModelCapabilities = [.local, .text]
     let response: InstructorResponse
+
+    init(id: String = "Fixture", response: InstructorResponse) {
+        self.id = id
+        self.response = response
+    }
+
     func reason(request: InstructorRequest) async throws -> InstructorResponse { response }
 }
 
@@ -527,6 +1139,95 @@ private final class CountingGuideModel: InstructorModel {
         return InstructorResponse(message: "Step \(requests.count)",
             action: .init(type: .pointToElement, targetElementId: "target", targetBounds: nil, overlay: .spotlight),
             expectedOutcome: .init(type: .visualChange, description: "Check the requested result"), taskComplete: false)
+    }
+}
+
+private final class FinalGuideModel: InstructorModel {
+    let id = "Fixture final guide"
+    let capabilities: ModelCapabilities = [.local, .text]
+    var requests: [InstructorRequest] = []
+    let expectedOutcome: ExpectedOutcome?
+
+    init(expectedOutcome: ExpectedOutcome? = nil) {
+        self.expectedOutcome = expectedOutcome
+    }
+
+    func reason(request: InstructorRequest) async throws -> InstructorResponse {
+        requests.append(request)
+        return InstructorResponse(
+            message: "Choose Finish.",
+            action: .init(
+                type: .pointToElement,
+                targetElementId: "target",
+                targetBounds: nil,
+                overlay: .spotlight
+            ),
+            expectedOutcome: expectedOutcome,
+            taskComplete: false,
+            completesTaskAfterSuccess: true
+        )
+    }
+}
+
+private final class ProfileNavigationModel: InstructorModel {
+    let id = "Fixture profile navigation"
+    let capabilities: ModelCapabilities = [.local, .text]
+    var requests: [InstructorRequest] = []
+
+    func reason(request: InstructorRequest) async throws -> InstructorResponse {
+        requests.append(request)
+        let firstStep = request.guideContext?.completedSteps.isEmpty != false
+        let targetID = firstStep ? "profile" : "manage-account"
+        return InstructorResponse(
+            message: firstStep
+                ? "Open your account menu."
+                : "Choose Manage your Google Account.",
+            action: .init(
+                type: .pointToElement,
+                targetElementId: targetID,
+                targetBounds: nil,
+                overlay: .spotlight
+            ),
+            expectedOutcome: .init(
+                type: .visualChange,
+                description: "The next account screen should appear."
+            ),
+            taskComplete: false,
+            // Deliberately wrong on the first navigation click: the controller must use
+            // observed interface evidence and continue instead of stopping early.
+            completesTaskAfterSuccess: firstStep
+        )
+    }
+}
+
+private final class VSCodeThemeNavigationModel: InstructorModel {
+    let id = "Fixture VSCode theme navigation"
+    let capabilities: ModelCapabilities = [.local, .text]
+    var requests: [InstructorRequest] = []
+
+    func reason(request: InstructorRequest) async throws -> InstructorResponse {
+        requests.append(request)
+        let firstStep = request.guideContext?.completedSteps.isEmpty != false
+        return InstructorResponse(
+            message: firstStep ? "Open the Code menu." : "Open Settings.",
+            action: .init(
+                type: .pointToElement,
+                targetElementId: firstStep ? "code-menu" : "settings-menu",
+                targetBounds: nil,
+                overlay: .spotlight
+            ),
+            expectedOutcome: .init(
+                type: .elementAppears,
+                description: firstStep
+                    ? "The Settings menu item should appear."
+                    : "Theme choices should appear.",
+                element: .init(
+                    labels: [firstStep ? "Settings" : "Theme"],
+                    role: "AXMenuItem"
+                )
+            ),
+            taskComplete: false
+        )
     }
 }
 
@@ -608,7 +1309,7 @@ final class DisplayParameterChangeTests: XCTestCase {
         let suite = "DisplayParameterChangeTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
-        return BeaconController(
+        let controller = BeaconController(
             privacySettings: PrivacySettingsStore(defaults: defaults),
             modelSettings: ModelConfigurationStore(
                 defaults: defaults,
@@ -618,8 +1319,11 @@ final class DisplayParameterChangeTests: XCTestCase {
             model: AnswerModel(),
             observationEvents: { _, _ in AsyncStream { _ in } },
             hasScreenCapturePermission: { false },
-            currentDisplays: currentDisplays
+            currentDisplays: currentDisplays,
+            presentsUserInterface: false
         )
+        addTeardownBlock { @MainActor in controller.cancel() }
+        return controller
     }
 
     private func fixture() -> ScreenScene {
@@ -695,7 +1399,7 @@ final class ExcludedApplicationCaptureTests: XCTestCase {
         addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
         let privacy = PrivacySettingsStore(defaults: defaults)
         for bundleID in excluded { privacy.setExcluded(true, bundleIdentifier: bundleID) }
-        return BeaconController(
+        let controller = BeaconController(
             privacySettings: privacy,
             modelSettings: ModelConfigurationStore(
                 defaults: defaults,
@@ -706,8 +1410,11 @@ final class ExcludedApplicationCaptureTests: XCTestCase {
             observationEvents: { _, _ in AsyncStream { _ in } },
             captureSnapshot: { _ in recorder.snapshot() },
             hasScreenCapturePermission: { true },
-            currentDisplays: { [] }
+            currentDisplays: { [] },
+            presentsUserInterface: false
         )
+        addTeardownBlock { @MainActor in controller.cancel() }
+        return controller
     }
 
     private func scene(bundleID: String) -> ScreenScene {
@@ -815,7 +1522,7 @@ final class StepCompletedDuringRecoveryTests: XCTestCase {
         let suite = "StepCompletedDuringRecoveryTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
-        return BeaconController(
+        let controller = BeaconController(
             privacySettings: PrivacySettingsStore(defaults: defaults),
             modelSettings: ModelConfigurationStore(
                 defaults: defaults,
@@ -825,8 +1532,11 @@ final class StepCompletedDuringRecoveryTests: XCTestCase {
             model: RecoveryGuideModel(),
             observationEvents: { _, _ in events.stream() },
             hasScreenCapturePermission: { false },
-            currentDisplays: { [] }
+            currentDisplays: { [] },
+            presentsUserInterface: false
         )
+        addTeardownBlock { @MainActor in controller.cancel() }
+        return controller
     }
 }
 

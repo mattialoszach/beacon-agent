@@ -61,6 +61,192 @@ final class ApplicationGuidePolicyTests: XCTestCase {
         XCTAssertEqual(stop.action, .stop)
     }
 
+    func testSystemSettingsDarkModeGuidesThroughAppearanceAndThenDark() throws {
+        let app = ApplicationDescriptor(
+            name: "System Settings",
+            bundleIdentifier: "com.apple.systempreferences",
+            processIdentifier: 1
+        )
+        let appearance = element(id: "appearance", label: "Appearance", role: "AXRow")
+        var request = InstructorRequest(
+            question: "Where do I change to dark mode?",
+            scene: ScreenScene(
+                timestamp: Date(), activeApplication: app, activeWindow: nil,
+                screenshot: nil, elements: [appearance], displays: []
+            ),
+            mode: .guide
+        )
+
+        var response = try XCTUnwrap(planner.response(for: request))
+        XCTAssertEqual(response.message, "Open Appearance.")
+        XCTAssertEqual(response.action?.targetElementId, "appearance")
+        XCTAssertNotEqual(response.completesTaskAfterSuccess, true)
+
+        let dark = element(id: "dark", label: "Dark", role: "AXRadioButton", value: "0")
+        request = InstructorRequest(
+            question: request.question,
+            scene: ScreenScene(
+                timestamp: Date(), activeApplication: app, activeWindow: nil,
+                screenshot: nil, elements: [appearance, dark], displays: []
+            ),
+            mode: .guide,
+            guideContext: GuideContext(
+                stepNumber: 2,
+                maximumSteps: 8,
+                completedSteps: [
+                    CompletedGuideStep(
+                        number: 1, instruction: "Open Appearance.",
+                        targetElementID: "appearance", targetLabel: "Appearance"
+                    )
+                ]
+            )
+        )
+
+        response = try XCTUnwrap(planner.response(for: request))
+        XCTAssertEqual(response.message, "Choose Dark.")
+        XCTAssertEqual(response.action?.targetElementId, "dark")
+        XCTAssertTrue(response.expectedOutcome?.canVerifyAutomatically == true)
+        XCTAssertEqual(response.completesTaskAfterSuccess, true)
+    }
+
+    func testSystemSettingsDarkModeSkipsNavigationAndRecognisesCompletion() throws {
+        let app = ApplicationDescriptor(
+            name: "System Settings",
+            bundleIdentifier: "com.apple.systempreferences",
+            processIdentifier: 1
+        )
+        let selectedDark = element(
+            id: "dark", label: "Dark", role: "AXRadioButton", value: "1"
+        )
+        let request = InstructorRequest(
+            question: "Dark mode",
+            scene: ScreenScene(
+                timestamp: Date(), activeApplication: app, activeWindow: nil,
+                screenshot: nil, elements: [selectedDark], displays: []
+            ),
+            mode: .guide
+        )
+
+        let response = try XCTUnwrap(planner.response(for: request))
+        XCTAssertNil(response.action)
+        XCTAssertEqual(response.taskComplete, true)
+    }
+
+    func testSystemSettingsDarkModeRejectsWrongControlRoles() throws {
+        let app = ApplicationDescriptor(
+            name: "System Settings",
+            bundleIdentifier: "com.apple.systempreferences",
+            processIdentifier: 1
+        )
+        let wrongAppearance = element(
+            id: "appearance", label: "Appearance", role: "AXButton"
+        )
+        var request = InstructorRequest(
+            question: "Dark mode",
+            scene: ScreenScene(
+                timestamp: Date(), activeApplication: app, activeWindow: nil,
+                screenshot: nil, elements: [wrongAppearance], displays: []
+            ),
+            mode: .guide
+        )
+        XCTAssertNil(planner.response(for: request))
+
+        let appearance = element(id: "appearance", label: "Appearance", role: "AXRow")
+        let wrongDark = element(
+            id: "dark", label: "Dark", role: "AXButton", value: "1"
+        )
+        request = InstructorRequest(
+            question: request.question,
+            scene: ScreenScene(
+                timestamp: Date(), activeApplication: app, activeWindow: nil,
+                screenshot: nil, elements: [appearance, wrongDark], displays: []
+            ),
+            mode: .guide
+        )
+
+        let response = try XCTUnwrap(planner.response(for: request))
+        XCTAssertEqual(response.action?.targetElementId, "appearance")
+        XCTAssertNotEqual(response.taskComplete, true)
+    }
+
+    func testSystemSettingsRecipeUsesOCRFusedOntoStableAppearanceRow() throws {
+        let app = ApplicationDescriptor(
+            name: "System Settings",
+            bundleIdentifier: "com.apple.systempreferences",
+            processIdentifier: 1
+        )
+        let row = element(id: "appearance", label: "", role: "AXRow")
+        var scene = ScreenScene(
+            timestamp: Date(), activeApplication: app, activeWindow: nil,
+            screenshot: nil, elements: [row], displays: []
+        )
+        scene.visualElements = [
+            VisualElementDescriptor(
+                id: "ocr_appearance",
+                text: "Appearance",
+                bounds: row.bounds!,
+                confidence: 0.95,
+                kind: .text
+            )
+        ]
+        var request = InstructorRequest(question: "Dark mode", scene: scene, mode: .guide)
+        request.setOfMarks = SetOfMarksBuilder().build(scene: scene, query: request.question)
+
+        let response = try XCTUnwrap(planner.response(for: request))
+
+        XCTAssertEqual(response.message, "Open Appearance.")
+        XCTAssertEqual(response.action?.targetElementId, row.id)
+    }
+
+    func testSystemSettingsRecipeUsesOCRForValueOnlyDarkRadio() throws {
+        let app = ApplicationDescriptor(
+            name: "System Settings",
+            bundleIdentifier: "com.apple.systempreferences",
+            processIdentifier: 1
+        )
+        let dark = UIElementDescriptor(
+            id: "dark", role: "AXRadioButton", subrole: nil, label: nil,
+            title: nil, value: "0", enabled: true, focused: false,
+            bounds: .init(x: 0.5, y: 0.2, width: 0.2, height: 0.08)
+        )
+        var scene = ScreenScene(
+            timestamp: Date(), activeApplication: app, activeWindow: nil,
+            screenshot: nil, elements: [dark], displays: []
+        )
+        scene.visualElements = [
+            VisualElementDescriptor(
+                id: "ocr_dark", text: "Dark",
+                bounds: .init(x: 0.55, y: 0.22, width: 0.08, height: 0.03),
+                confidence: 0.95, kind: .text
+            )
+        ]
+        var request = InstructorRequest(
+            question: "Dark mode",
+            scene: scene,
+            mode: .guide,
+            guideContext: GuideContext(
+                stepNumber: 2,
+                maximumSteps: 8,
+                completedSteps: [
+                    CompletedGuideStep(
+                        number: 1,
+                        instruction: "Open Appearance.",
+                        targetElementID: "appearance",
+                        targetLabel: "Appearance"
+                    )
+                ]
+            )
+        )
+        request.setOfMarks = SetOfMarksBuilder().build(scene: scene, query: request.question)
+
+        let response = try XCTUnwrap(planner.response(for: request))
+
+        XCTAssertEqual(dark.bestLabel, "0")
+        XCTAssertEqual(response.message, "Choose Dark.")
+        XCTAssertEqual(response.action?.targetElementId, dark.id)
+        XCTAssertEqual(response.completesTaskAfterSuccess, true)
+    }
+
     func testRecipeCompletesWhenUserStartedWithTheMenuAlreadyOpen() throws {
         var request = makeRequest(elements: [])
         request.guideContext = GuideContext(stepNumber: 3, maximumSteps: 8, completedSteps: [
@@ -165,14 +351,19 @@ final class ApplicationGuidePolicyTests: XCTestCase {
         )
     }
 
-    private func element(id: String, label: String, role: String) -> UIElementDescriptor {
+    private func element(
+        id: String,
+        label: String,
+        role: String,
+        value: String? = nil
+    ) -> UIElementDescriptor {
         UIElementDescriptor(
             id: id,
             role: role,
             subrole: nil,
             label: label,
             title: nil,
-            value: nil,
+            value: value,
             enabled: true,
             focused: false,
             bounds: .init(x: 0.1, y: 0.1, width: 0.1, height: 0.05)

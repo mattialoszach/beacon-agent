@@ -19,6 +19,7 @@ final class OverlayController {
 
     private var panels: [OverlayPanel] = []
     private let cursorPositionMonitor: CursorPositionMonitor
+    private let isEnabled: Bool
     private var escapeMonitor: Any?
     private var localEscapeMonitor: Any?
     private var isMonitoringCursor = false
@@ -26,12 +27,14 @@ final class OverlayController {
     private(set) var presentation: Presentation?
     var onDismiss: (() -> Void)?
 
-    init() {
+    init(isEnabled: Bool = true) {
         cursorPositionMonitor = CursorPositionMonitor()
+        self.isEnabled = isEnabled
     }
 
-    init(cursorPositionMonitor: CursorPositionMonitor) {
+    init(cursorPositionMonitor: CursorPositionMonitor, isEnabled: Bool = true) {
         self.cursorPositionMonitor = cursorPositionMonitor
+        self.isEnabled = isEnabled
     }
 
     func showInstruction(_ instruction: VisualInstruction) {
@@ -84,6 +87,7 @@ final class OverlayController {
     }
 
     private func show(_ presentation: Presentation) {
+        guard isEnabled else { return }
         self.presentation = presentation
         cursorMovementBaseline = cursorPositionMonitor.presentationBaseline()
         let mapper = DisplayGeometryProvider().currentMapper()

@@ -4,6 +4,7 @@ import SwiftUI
 @MainActor
 final class FloatingPromptController {
     private let cursorPositionMonitor: CursorPositionMonitor
+    private let isEnabled: Bool
     private var panel: PromptPanel?
     private var presentation: FloatingPromptPresentation?
     private var statusEscapeMonitor: Any?
@@ -11,18 +12,21 @@ final class FloatingPromptController {
     private var resignKeyObserver: (any NSObjectProtocol)?
     private var isMonitoringCursor = false
 
-    init() {
+    init(isEnabled: Bool = true) {
         cursorPositionMonitor = CursorPositionMonitor()
+        self.isEnabled = isEnabled
     }
 
-    init(cursorPositionMonitor: CursorPositionMonitor) {
+    init(cursorPositionMonitor: CursorPositionMonitor, isEnabled: Bool = true) {
         self.cursorPositionMonitor = cursorPositionMonitor
+        self.isEnabled = isEnabled
     }
 
     func show(
         onSubmit: @escaping (String) -> Void,
         onCancel: @escaping () -> Void
     ) {
+        guard isEnabled else { return }
         close()
         beginCursorMonitoring()
         let panel = makePanel()
@@ -87,6 +91,7 @@ final class FloatingPromptController {
         message: String,
         onCancel: @escaping () -> Void
     ) {
+        guard isEnabled else { return }
         if let presentation {
             presentation.showStatus(mode: mode, message: message,
                                     cursorMovementBaseline: cursorPositionMonitor.presentationBaseline())

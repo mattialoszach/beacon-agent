@@ -69,9 +69,15 @@ struct RequestModeClassifier {
             )
         }
 
-        var askScore = 0.35
-        var guideScore = 0.0
+        // Beacon is primarily an on-screen instructor. Ambiguous, terse requests such as
+        // "Dark mode" should therefore prefer guidance; explicit explanation evidence
+        // below still decisively selects the informational answer path.
+        var askScore = 0.25
+        var guideScore = 0.35
         var evidence: [String] = []
+        var hasExplanationEvidence = false
+        var hasExplicitExplanationPhrase = false
+        var hasStrongSemanticExplanation = false
 
         if Self.guidePhrases.contains(where: normalized.hasPrefix) {
             guideScore += 3.4
@@ -79,6 +85,8 @@ struct RequestModeClassifier {
         }
         if Self.explanationPhrases.contains(where: normalized.hasPrefix) {
             askScore += 3.4
+            hasExplanationEvidence = true
+            hasExplicitExplanationPhrase = true
             evidence.append("explanation phrasing")
         }
 
@@ -89,6 +97,7 @@ struct RequestModeClassifier {
         }
         if !requestTokens.intersection(Self.informationWords).isEmpty {
             askScore += 1.0
+            hasExplanationEvidence = true
             evidence.append("information request")
         }
         if normalized.contains("step by step") || normalized.contains("walk me through") {
@@ -108,12 +117,19 @@ struct RequestModeClassifier {
         if let semantic = semanticScorer.scores(for: request) {
             askScore += semantic.ask * 1.6
             guideScore += semantic.guide * 1.6
+            hasStrongSemanticExplanation = semantic.ask > semantic.guide + 0.35
             if abs(semantic.ask - semantic.guide) >= 0.08 {
                 evidence.append(semantic.guide > semantic.ask ? "semantic action match" : "semantic explanation match")
             }
         }
 
-        let mode: InteractionMode = guideScore > askScore + 0.15 ? .guide : .ask
+        if evidence.isEmpty {
+            evidence.append("guidance default")
+        }
+        let mayBeInformational = hasExplanationEvidence || hasStrongSemanticExplanation
+        let shouldAnswer = hasExplicitExplanationPhrase
+            || (mayBeInformational && askScore > guideScore)
+        let mode: InteractionMode = shouldAnswer ? .ask : .guide
         let total = max(0.001, askScore + guideScore)
         let confidence = min(0.99, 0.5 + abs(guideScore - askScore) / total * 0.5)
         return RequestModeClassification(
@@ -143,13 +159,14 @@ struct RequestModeClassifier {
     private static let guidePhrases = [
         "how do i", "how can i", "how to", "where is", "where's", "where are",
         "where do i", "where can i", "where can i find", "show me", "guide me",
-        "help me", "find the", "take me to", "steps to", "can you help me"
+        "find the", "take me to", "steps to"
     ]
 
     private static let explanationPhrases = [
         "what is", "what's", "what are", "what does", "why", "explain", "describe",
         "tell me about", "is this", "are these", "does this", "do we", "which model",
-        "how does", "how is", "how are", "give me an overview"
+        "how does", "how is", "how are", "give me an overview", "help me understand",
+        "can you help me understand"
     ]
 
     private static let actionVerbs: Set<String> = [

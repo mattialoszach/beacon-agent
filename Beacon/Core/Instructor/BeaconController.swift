@@ -66,7 +66,7 @@ final class BeaconController: ObservableObject {
 
     private let accessibility = AccessibilityService()
     private let screenCapture = ScreenCaptureService()
-    private let visionAnalyzer = VisionSceneAnalyzer()
+    private let analyzeVisualContext: @Sendable (ScreenSnapshot) async throws -> [VisualElementDescriptor]
     private let setOfMarksBuilder = SetOfMarksBuilder()
     private let accessibilityChangeObserver = AccessibilityChangeObserver()
     private let guidePolicyRegistry = ApplicationGuidePolicyRegistry()
@@ -89,6 +89,7 @@ final class BeaconController: ObservableObject {
     private var pendingHistoryItemID: UUID?
     private var frameComparisonSamples = FrameComparisonSampleStore()
     private var currentMode: InteractionMode = .ask
+    private var automaticallyFollowsCurrentStep = false
     private var settingsCancellables = Set<AnyCancellable>()
     private var lastExternalApplication: NSRunningApplication?
     private var processingActivity: NSObjectProtocol?
@@ -109,6 +110,8 @@ final class BeaconController: ObservableObject {
     /// notifications many times per second would otherwise keep Beacon capturing
     /// back-to-back for the whole observation window.
     private static let minimumObservationInterval: TimeInterval = 0.45
+    private static let observationFallbackInterval: TimeInterval = 1
+    private static let observationTimeout: TimeInterval = 10
 
     var isObserving: Bool {
         [
@@ -124,8 +127,12 @@ final class BeaconController: ObservableObject {
         model: (any InstructorModel)? = nil,
         observationEvents: ((Int32, TimeInterval) -> AsyncStream<AccessibilityChangeEvent>)? = nil,
         captureSnapshot: (@MainActor (CGPoint?) async throws -> ScreenSnapshot)? = nil,
+        analyzeVisualContext: @escaping @Sendable (ScreenSnapshot) async throws -> [VisualElementDescriptor] = {
+            try await VisionSceneAnalyzer().analyze(snapshot: $0)
+        },
         hasScreenCapturePermission: @escaping () -> Bool = { CGPreflightScreenCaptureAccess() },
-        currentDisplays: @escaping () -> [DisplayDescriptor] = { BeaconController.activeDisplays() }
+        currentDisplays: @escaping () -> [DisplayDescriptor] = { BeaconController.activeDisplays() },
+        presentsUserInterface: Bool = true
     ) {
         let privacySettings = privacySettings ?? PrivacySettingsStore()
         let modelSettings = modelSettings ?? ModelConfigurationStore()
@@ -135,13 +142,20 @@ final class BeaconController: ObservableObject {
         observationEventsOverride = observationEvents
         modelOverride = model
         captureSnapshotOverride = captureSnapshot
+        self.analyzeVisualContext = analyzeVisualContext
         self.hasScreenCapturePermission = hasScreenCapturePermission
         self.currentDisplays = currentDisplays
         knownDisplays = currentDisplays()
         let cursorPositionMonitor = CursorPositionMonitor()
         self.cursorPositionMonitor = cursorPositionMonitor
-        prompt = FloatingPromptController(cursorPositionMonitor: cursorPositionMonitor)
-        overlay = OverlayController(cursorPositionMonitor: cursorPositionMonitor)
+        prompt = FloatingPromptController(
+            cursorPositionMonitor: cursorPositionMonitor,
+            isEnabled: presentsUserInterface
+        )
+        overlay = OverlayController(
+            cursorPositionMonitor: cursorPositionMonitor,
+            isEnabled: presentsUserInterface
+        )
         privacySettings.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &settingsCancellables)
@@ -389,6 +403,7 @@ final class BeaconController: ObservableObject {
         noChangeRetries = 0
         unexpectedChangeRetries = 0
         contextReplans = 0
+        automaticallyFollowsCurrentStep = false
         pendingHistoryItemID = nil
         frameComparisonSamples.removeAll()
         if cancelsRequest {
@@ -471,6 +486,7 @@ final class BeaconController: ObservableObject {
             selectedTarget = nil
             let hasNext = activeGuide.map {
                 $0.completedSteps.count < $0.maximumSteps && currentResponse?.taskComplete != true
+                    && currentResponse?.completesTaskAfterSuccess != true
                     && currentResponse?.action?.type != .complete
             } ?? false
             if hasNext {
@@ -596,8 +612,10 @@ final class BeaconController: ObservableObject {
         request.setOfMarks = setOfMarksBuilder.build(scene: scene, query: question)
         currentSetOfMarks = request.setOfMarks
         let step = activeGuide.map { " step \($0.completedSteps.count + 1)" } ?? ""
-        let modelResponse: InstructorResponse
+        var modelResponse: InstructorResponse
         let usedRecipe: Bool
+        var reasoningModel: (any InstructorModel)?
+        var usedLocalFallback = false
         if mode == .guide,
            let planned = ApplicationGuidePlanner(registry: guidePolicyRegistry).response(for: request) {
             outboundImagePreview = nil
@@ -610,6 +628,7 @@ final class BeaconController: ObservableObject {
         } else {
             usedRecipe = false
             let model = try await selectedModel(for: request)
+            reasoningModel = model
             try checkActiveOperation()
             if model.capabilities.contains(.vision),
                privacySettings.cloudVisionEnabled,
@@ -637,12 +656,32 @@ final class BeaconController: ObservableObject {
                 errorMessage = "\(model.id) is unavailable: \(error.localizedDescription). Using local Accessibility matching."
                 var localRequest = request
                 localRequest.visualContextImage = nil
-                // Keep the exact outbound image available for review if it was already sent.
-                modelContextPreview = ModelContextBuilder().build(for: localRequest).userPrompt
+                // Keep the exact provider prompt and outbound image available for review
+                // if the original request was already attempted. The local fallback does
+                // not cross a privacy boundary and must not replace either inspection view.
                 modelResponse = try await AccessibilityHeuristicProvider().reason(request: localRequest)
+                usedLocalFallback = true
             }
         }
         try checkActiveOperation()
+        if mode == .guide, !modelResponse.isActionableGuideResponse {
+            if !usedRecipe,
+               !usedLocalFallback,
+               let reasoningModel,
+               !(reasoningModel is AccessibilityHeuristicProvider) {
+                errorMessage = "\(reasoningModel.id) did not provide an actionable guide step. Using local Accessibility matching."
+                var localRequest = request
+                localRequest.visualContextImage = nil
+                // Preserve the exact prompt prepared for the configured provider. A
+                // second, local-only interpretation must not obscure what was sent.
+                modelResponse = try await AccessibilityHeuristicProvider().reason(request: localRequest)
+                usedLocalFallback = true
+                try checkActiveOperation()
+            }
+            guard modelResponse.isActionableGuideResponse else {
+                throw InstructorResponseValidationError.incompleteGuideStep(modelResponse.message)
+            }
+        }
         let response: InstructorResponse
         if mode == .guide, modelResponse.action?.type == .pointToElement,
            modelResponse.expectedOutcome == nil {
@@ -653,13 +692,18 @@ final class BeaconController: ObservableObject {
                     type: .visualChange,
                     description: "The interface should change after this step."
                 ),
-                taskComplete: modelResponse.taskComplete
+                taskComplete: modelResponse.taskComplete,
+                completesTaskAfterSuccess: modelResponse.completesTaskAfterSuccess
             )
         } else {
             response = modelResponse
         }
         _ = try response.action?.validated(in: scene, marks: request.setOfMarks)
         currentResponse = response
+        automaticallyFollowsCurrentStep = mode == .guide
+            && !usedRecipe
+            && response.action?.type == .pointToElement
+            && GuideProgressPolicy.prefersContinuousGuidance(question)
         rawModelResponse = encodeForInspection(response)
         try transition(.responseGenerated(needsTarget: response.action?.type == .pointToElement))
 
@@ -738,7 +782,10 @@ final class BeaconController: ObservableObject {
             overlay.showInstruction(VisualInstruction(
                 text: response.message,
                 explanation: response.expectedOutcome?.canVerifyAutomatically == false
-                    ? "Check the result, then choose Confirm Result in Beacon’s menu." : nil,
+                    ? (automaticallyFollowsCurrentStep
+                        ? "Click once — Beacon will point to the next visible step."
+                        : "Check the result, then choose Confirm Result in Beacon’s menu.")
+                    : nil,
                 target: selectedTarget,
                 overlay: action.overlay
             ))
@@ -748,7 +795,9 @@ final class BeaconController: ObservableObject {
         // An informational answer has no task to confirm; only a guide's completion claim
         // needs the user to check the result.
         let claimsCompletion = response.taskComplete == true || response.action?.type == .complete
-        let needsConfirmation = (expectsChange && response.expectedOutcome?.canVerifyAutomatically != true)
+        let needsConfirmation = (expectsChange
+            && response.expectedOutcome?.canVerifyAutomatically != true
+            && !automaticallyFollowsCurrentStep)
             || (mode == .guide && !usedRecipe && claimsCompletion)
         if needsConfirmation {
             try transition(.confirmationRequested)
@@ -775,7 +824,9 @@ final class BeaconController: ObservableObject {
             succeeded: state == .completed ? (mode == .ask || usedRecipe && response.taskComplete == true) : nil
         )
         if state == .waitingForChange {
-            statusMessage = "Waiting for the interface to change…"
+            statusMessage = automaticallyFollowsCurrentStep
+                ? "Click the highlighted control — following the next screen automatically…"
+                : "Watching for the expected change…"
             beginObservation(from: presentationScene)
         } else {
             statusMessage = response.taskComplete == true ? "Task completed" : "Answered"
@@ -794,7 +845,7 @@ final class BeaconController: ObservableObject {
         }
         let snapshot = try await captureSnapshot(containing: point)
         try checkActiveOperation()
-        let visualElements = try await visionAnalyzer.analyze(snapshot: snapshot)
+        let visualElements = try await analyzeVisualContext(snapshot)
         try checkActiveOperation()
         // Secure-field rectangles are taken next to the screenshot as well as from the
         // scene that requested it, so a field that moved while the user was typing the
@@ -889,7 +940,8 @@ final class BeaconController: ObservableObject {
         request.guideContext = activeGuide?.context
         request.setOfMarks = setOfMarksBuilder.build(scene: scene, query: question)
         if mode == .guide,
-           ApplicationGuidePlanner(registry: guidePolicyRegistry).response(for: request) != nil {
+           ApplicationGuidePlanner(registry: guidePolicyRegistry)
+            .response(for: request)?.isActionableGuideResponse == true {
             return false
         }
         if modelSettings.provider == .openAI,
@@ -1031,12 +1083,18 @@ final class BeaconController: ObservableObject {
         source: ScreenScene,
         latest: ScreenScene,
         question: String,
-        replanningMessage: String
+        replanningMessage: String,
+        forceContinue: Bool = false
     ) async throws {
         currentScene = latest
         recordCompletedStep(from: source)
         let hasNextStep = activeGuide.map {
-            $0.completedSteps.count < $0.maximumSteps && response.taskComplete != true
+            $0.completedSteps.count < $0.maximumSteps
+                && (forceContinue || (
+                    response.taskComplete != true
+                        && response.completesTaskAfterSuccess != true
+                        && response.action?.type != .complete
+                ))
         } ?? false
         try transition(.verificationFinished(success: true, hasNextStep: hasNextStep))
         // A step that was already presented has an unresolved history row; resolve it
@@ -1050,7 +1108,10 @@ final class BeaconController: ObservableObject {
             await continueGuide(from: latest)
         } else {
             prompt.close()
-            statusMessage = completionStatusMessage()
+            statusMessage = completionStatusMessage(
+                forcedBySafetyLimit: forceContinue
+                    && activeGuide?.completedSteps.count == activeGuide?.maximumSteps
+            )
             activeGuide = nil
             endProcessingActivity()
         }
@@ -1058,10 +1119,16 @@ final class BeaconController: ObservableObject {
 
     /// A guide that finished its task on the eighth step is complete, not paused at the
     /// safety limit.
-    private func completionStatusMessage(confirmedByUser: Bool = false) -> String {
+    private func completionStatusMessage(
+        confirmedByUser: Bool = false,
+        forcedBySafetyLimit: Bool = false
+    ) -> String {
         let reachedLimit = activeGuide.map { $0.completedSteps.count == $0.maximumSteps } == true
-            && currentResponse?.taskComplete != true
-            && currentResponse?.action?.type != .complete
+            && (forcedBySafetyLimit || (
+                currentResponse?.taskComplete != true
+                    && currentResponse?.completesTaskAfterSuccess != true
+                    && currentResponse?.action?.type != .complete
+            ))
         if reachedLimit {
             return confirmedByUser
                 ? "Step confirmed; paused at the 8-step safety limit"
@@ -1236,12 +1303,14 @@ final class BeaconController: ObservableObject {
         let targetID = selectedTarget?.elementID
         let events = changeEvents(
             for: baseline.activeApplication.processIdentifier,
-            fallbackInterval: 3
+            fallbackInterval: Self.observationFallbackInterval
         )
         observationTask = Task { [weak self] in
-            let deadline = Date().addingTimeInterval(30)
+            let deadline = Date().addingTimeInterval(Self.observationTimeout)
             var latestUnconfirmedScene: ScreenScene?
             var lastCaptureAt: Date?
+            var attemptedLocalVisualVerification = false
+            var consecutiveObservationFailures = 0
             for await event in events {
                 guard !Task.isCancelled else { return }
                 guard let self, self.observationID == identifier else { return }
@@ -1256,6 +1325,7 @@ final class BeaconController: ObservableObject {
                 lastCaptureAt = Date()
                 do {
                     var newScene = try await self.captureTargetScene()
+                    consecutiveObservationFailures = 0
                     guard SceneIdentity.sameDisplays(baseline, newScene) else {
                         self.displayConfigurationChanged()
                         return
@@ -1283,43 +1353,110 @@ final class BeaconController: ObservableObject {
                         self.selectedTarget = target
                         self.overlay.updateTarget(target)
                     }
-                    let accessibilityChanged = SceneFingerprint(scene: newScene) != baselineFingerprint
+                    let latestFingerprint = SceneFingerprint(scene: newScene)
+                    let accessibilityChanged = latestFingerprint != baselineFingerprint
+                    let interfaceChanged = baselineFingerprint.interfaceChanged(comparedTo: latestFingerprint)
+                    let highlightedMenuOpened = GuideProgressPolicy.highlightedMenuOpened(
+                        event: event,
+                        target: targetID.flatMap { id in baseline.elements.first { $0.id == id } },
+                        latest: newScene
+                    )
                     var visualDifference: Double?
-                    if !accessibilityChanged {
-                        guard let baselineSnapshot = baseline.screenshot,
-                              !self.privacySettings.isExcluded(
-                                bundleIdentifier: newScene.activeApplication.bundleIdentifier
-                              ), self.hasScreenCapturePermission() else { continue }
-                        let point = baseline.activeWindow?.bounds
-                            .flatMap(DisplayGeometryProvider().currentMapper().axRect(from:))?.center
-                        // Compare a cheap in-memory sample first. OCR and shape analysis
-                        // cost far more than the comparison and are only worth running
-                        // once something on screen actually moved.
-                        let difference = try await self.frameDifference(
-                            from: baselineSnapshot,
-                            near: point
-                        )
-                        try self.checkActiveOperation()
-                        guard let difference,
-                              difference >= FrameDifferenceDetector().meaningfulThreshold else { continue }
-                        let accessibilityScene = newScene
-                        let visualScene = try await self.addingVisualContext(to: accessibilityScene, point: point)
-                        let stableScene = try await self.captureTargetScene()
-                        guard self.sceneFreshnessValidator.contextStatus(
-                            source: accessibilityScene,
-                            latest: stableScene
-                        ) == .valid, visualScene.screenshot != nil else { continue }
-                        newScene = stableScene
-                            .replacingScreenshot(with: visualScene.screenshot)
-                            .replacingVisualElements(with: visualScene.visualElements)
-                        visualDifference = difference
+                    let shouldProbeVisualChange = !accessibilityChanged
+                        || (self.automaticallyFollowsCurrentStep && !interfaceChanged)
+                    if shouldProbeVisualChange {
+                        if let baselineSnapshot = baseline.screenshot,
+                           !self.privacySettings.isExcluded(
+                            bundleIdentifier: newScene.activeApplication.bundleIdentifier
+                           ), self.hasScreenCapturePermission() {
+                            let point = baseline.activeWindow?.bounds
+                                .flatMap(DisplayGeometryProvider().currentMapper().axRect(from:))?.center
+                            // Compare a cheap in-memory sample first. OCR and shape analysis
+                            // cost far more than the comparison and are only worth running
+                            // once something on screen actually moved.
+                            let difference = try await self.frameDifference(
+                                from: baselineSnapshot,
+                                near: point
+                            )
+                            try self.checkActiveOperation()
+                            if let difference,
+                               difference >= FrameDifferenceDetector().meaningfulThreshold {
+                                let accessibilityScene = newScene
+                                let visualScene = try await self.addingVisualContext(
+                                    to: accessibilityScene,
+                                    point: point
+                                )
+                                let stableScene = try await self.captureTargetScene()
+                                guard self.sceneFreshnessValidator.contextStatus(
+                                    source: accessibilityScene,
+                                    latest: stableScene
+                                ) == .valid, visualScene.screenshot != nil else { continue }
+                                newScene = stableScene
+                                    .replacingScreenshot(with: visualScene.screenshot)
+                                    .replacingVisualElements(with: visualScene.visualElements)
+                                visualDifference = difference
+                            } else if !highlightedMenuOpened {
+                                continue
+                            }
+                        } else if !highlightedMenuOpened {
+                            continue
+                        }
                     }
-                    let verification = StepVerifier().verify(
+                    let verifier = StepVerifier()
+                    var verification = verifier.verify(
                         expected: self.currentResponse?.expectedOutcome,
                         before: baseline,
                         after: newScene,
                         visualDifference: visualDifference
                     )
+                    if !verification.succeeded,
+                       !attemptedLocalVisualVerification,
+                       self.currentMode == .guide,
+                       self.hasScreenCapturePermission(),
+                       !self.privacySettings.isExcluded(
+                           bundleIdentifier: newScene.activeApplication.bundleIdentifier
+                       ),
+                       verifier.mayBenefitFromLocalVisualContext(
+                           expected: self.currentResponse?.expectedOutcome,
+                           before: baseline,
+                           after: newScene
+                       ) {
+                        attemptedLocalVisualVerification = true
+                        if let visualScene = try await self.localVisualVerificationScene(
+                            from: newScene
+                        ) {
+                            newScene = visualScene
+                            verification = verifier.verify(
+                                expected: self.currentResponse?.expectedOutcome,
+                                before: baseline,
+                                after: newScene,
+                                visualDifference: visualDifference
+                            )
+                        }
+                    }
+                    if !verification.succeeded,
+                       self.automaticallyFollowsCurrentStep,
+                       SceneIdentity.sameApplication(baseline, newScene),
+                       SceneIdentity.sameWindow(baseline.activeWindow, newScene.activeWindow),
+                       interfaceChanged || visualDifference != nil || highlightedMenuOpened,
+                       let response = self.currentResponse {
+                        self.accessibilityChangeObserver.stop()
+                        try self.transition(.meaningfulChangeDetected)
+                        self.confirmationBaseline = nil
+                        self.confirmationMessage = nil
+                        self.overlay.dismiss()
+                        try await self.advanceAfterVerifiedStep(
+                            response: response,
+                            source: baseline,
+                            latest: newScene,
+                            question: self.currentQuestion
+                                ?? self.activeGuide?.question
+                                ?? "Continue the guide",
+                            replanningMessage: "Next screen detected — finding the next control…",
+                            forceContinue: true
+                        )
+                        return
+                    }
                     if !verification.succeeded {
                         if let target = self.selectedTarget {
                             switch self.sceneFreshnessValidator.validate(
@@ -1368,7 +1505,10 @@ final class BeaconController: ObservableObject {
                     self.resetRecoveryAttempts()
                     self.recordCompletedStep(from: baseline)
                     let hasNextStep = self.activeGuide.map {
-                        $0.completedSteps.count < $0.maximumSteps && self.currentResponse?.taskComplete != true
+                        $0.completedSteps.count < $0.maximumSteps
+                            && self.currentResponse?.taskComplete != true
+                            && self.currentResponse?.completesTaskAfterSuccess != true
+                            && self.currentResponse?.action?.type != .complete
                     } ?? false
                     try self.transition(.verificationFinished(success: true, hasNextStep: hasNextStep))
                     self.overlay.dismiss()
@@ -1384,6 +1524,13 @@ final class BeaconController: ObservableObject {
                     return
                 } catch {
                     guard (try? self.checkActiveOperation()) != nil else { return }
+                    consecutiveObservationFailures += 1
+                    if consecutiveObservationFailures >= 3 {
+                        self.stopGuideAfterRecovery(
+                            message: "Beacon stopped waiting because it could not read the current interface after three attempts. Keep the target app in front, then try again."
+                        )
+                        return
+                    }
                 }
             }
             guard !Task.isCancelled, let self, self.observationID == identifier else { return }
@@ -1393,6 +1540,22 @@ final class BeaconController: ObservableObject {
                 self.observationID = nil
                 self.observationTask = nil
                 self.showConfirmationReminder()
+                return
+            }
+            if self.automaticallyFollowsCurrentStep,
+               self.currentResponse?.completesTaskAfterSuccess == true {
+                try? self.transition(.confirmationRequested)
+                self.confirmationBaseline = baseline
+                    .replacingScreenshot(with: nil)
+                    .replacingVisualElements(with: [])
+                self.confirmationMessage = self.currentResponse?.expectedOutcome?.description
+                    ?? "Check whether the requested change completed."
+                self.overlay.dismiss()
+                self.observationID = nil
+                self.observationTask = nil
+                self.statusMessage = "No new screen was detected. Confirm only if the task actually completed."
+                self.showConfirmationReminder()
+                self.endProcessingActivity()
                 return
             }
             let noChange = latestUnconfirmedScene == nil
@@ -1440,6 +1603,25 @@ final class BeaconController: ObservableObject {
             question: currentQuestion ?? activeGuide?.question ?? "Continue the guide",
             mode: currentMode
         )
+    }
+
+    /// A visible guide may expose a newly changed control whose AX node has role/value
+    /// evidence but no label. Capture and OCR it once locally, validate that the scene
+    /// stayed stable during analysis, and keep the result in memory for verification only.
+    private func localVisualVerificationScene(from scene: ScreenScene) async throws -> ScreenScene? {
+        guard hasScreenCapturePermission(),
+              !privacySettings.isExcluded(
+                  bundleIdentifier: scene.activeApplication.bundleIdentifier
+              ) else { return nil }
+        let point = scene.activeWindow?.bounds
+            .flatMap(DisplayGeometryProvider().currentMapper().axRect(from:))?.center
+        let visualScene = try await addingVisualContext(to: scene, point: point)
+        let stableScene = try await captureTargetScene()
+        guard sceneFreshnessValidator.contextStatus(source: scene, latest: stableScene) == .valid,
+              visualScene.screenshot != nil else { return nil }
+        return stableScene
+            .replacingScreenshot(with: visualScene.screenshot)
+            .replacingVisualElements(with: visualScene.visualElements)
     }
 
     private func showConfirmationReminder() {
@@ -1663,14 +1845,89 @@ final class BeaconController: ObservableObject {
     }
 }
 
+enum GuideProgressPolicy {
+    private static let continuousGuidanceWords: Set<String> = [
+        "account", "avatar", "button", "change", "choose", "click", "configure",
+        "edit", "enable", "disable", "find", "guide", "how", "menu", "open",
+        "photo", "picture", "profile", "select", "set", "setting", "settings",
+        "show", "switch", "turn", "where"
+    ]
+
+    static func prefersContinuousGuidance(_ question: String) -> Bool {
+        let words = Set(question.lowercased().split {
+            !$0.isLetter && !$0.isNumber
+        }.map(String.init))
+        return !words.isDisjoint(with: continuousGuidanceWords)
+    }
+
+    static func highlightedMenuOpened(
+        event: AccessibilityChangeEvent,
+        target: UIElementDescriptor?,
+        latest: ScreenScene
+    ) -> Bool {
+        guard let target,
+              target.role == "AXMenuBarItem" || target.role == "AXPopUpButton" else {
+            return false
+        }
+        if target.selected != true,
+           latest.elements.first(where: { $0.id == target.id })?.selected == true {
+            return true
+        }
+        guard case let .notification(name, _, observedLabel) = event,
+              name == kAXMenuOpenedNotification,
+              let observedLabel else { return false }
+        let expected = normalizedMenuLabel(target.bestLabel)
+        let observed = normalizedMenuLabel(observedLabel)
+        guard !expected.isEmpty, !observed.isEmpty else { return false }
+        return expected == observed
+            || observed.hasPrefix(expected + " ")
+            || expected.hasPrefix(observed + " ")
+    }
+
+    private static func normalizedMenuLabel(_ label: String) -> String {
+        label.lowercased()
+            .replacingOccurrences(of: "…", with: "")
+            .split { !$0.isLetter && !$0.isNumber }
+            .joined(separator: " ")
+    }
+}
+
 enum LocalVisualContextPolicy {
+    private static let confidentAccessibleMatch = 0.65
+    private static let browserBundleIdentifiers: Set<String> = [
+        "com.apple.safari",
+        "com.brave.browser",
+        "com.google.chrome",
+        "com.microsoft.edgemac",
+        "company.thebrowser.browser",
+        "org.mozilla.firefox"
+    ]
+    private static let staticMenuBundleIdentifiers: Set<String> = [
+        "com.microsoft.vscode",
+        "com.microsoft.vscodeinsiders",
+        "com.vscodium"
+    ]
+
     static func requiresVisualFallback(scene: ScreenScene, question: String) -> Bool {
         let normalized = question.lowercased()
         let explicitlyVisual = [
             "circle", "rectangle", "shape", "drawing", "canvas", "icon", "symbol",
             "image", "screenshot", "visible", "on screen"
         ].contains(where: normalized.contains)
-        return explicitlyVisual || SemanticElementMatcher.bestMatch(for: question, in: scene.elements) == nil
+        let semanticMatch = SemanticElementMatcher.bestMatch(for: question, in: scene.elements)
+        let needsBrowserContext = scene.activeApplication.bundleIdentifier
+            .map { browserBundleIdentifiers.contains($0.lowercased()) } == true
+            && GuideProgressPolicy.prefersContinuousGuidance(question)
+        let needsStaticMenuContext = scene.activeApplication.bundleIdentifier
+            .map { staticMenuBundleIdentifiers.contains($0.lowercased()) } == true
+            && GuideProgressPolicy.prefersContinuousGuidance(question)
+        let needsVisibleMenuTransition = GuideProgressPolicy.prefersContinuousGuidance(question)
+            && semanticMatch?.element.role == "AXMenuBarItem"
+        return explicitlyVisual
+            || needsBrowserContext
+            || needsStaticMenuContext
+            || needsVisibleMenuTransition
+            || (semanticMatch?.score ?? 0) < confidentAccessibleMatch
     }
 }
 
@@ -1699,6 +1956,20 @@ struct SceneFingerprint: Equatable {
         focused = scene.elements.first(where: \.focused)?.id
     }
 
+    /// Focus alone is too weak to prove that a navigation click revealed the next step.
+    /// Menus, popovers, pages, control values, and application/window changes are useful
+    /// progress; a button merely becoming focused is not.
+    func interfaceChanged(comparedTo other: SceneFingerprint) -> Bool {
+        app != other.app
+            || processIdentifier != other.processIdentifier
+            || window != other.window
+            || hasWindow != other.hasWindow
+            || windowID != other.windowID
+            || windows != other.windows
+            || displays != other.displays
+            || elements != other.elements
+    }
+
     struct WindowState: Equatable {
         let id: String?
         let title: String?
@@ -1718,12 +1989,14 @@ struct SceneFingerprint: Equatable {
         let label: String
         let value: String?
         let enabled: Bool
+        let selected: Bool?
 
         init(_ element: UIElementDescriptor) {
             id = element.id
             label = element.bestLabel
             value = element.value
             enabled = element.enabled
+            selected = element.selected
         }
     }
 }
@@ -1743,6 +2016,37 @@ private enum SceneFreshnessValidationError: LocalizedError {
 
     var errorDescription: String? {
         "Beacon could not finish checking the current interface. Try again after the application has finished updating."
+    }
+}
+
+private enum InstructorResponseValidationError: LocalizedError {
+    case incompleteGuideStep(String)
+
+    var errorDescription: String? {
+        guard case let .incompleteGuideStep(message) = self else { return nil }
+        let detail = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        return "Beacon could not locate a safe on-screen target for the next guide step."
+            + (detail.isEmpty ? "" : " \(detail)")
+    }
+}
+
+private extension InstructorResponse {
+    /// Guide mode may finish only on an explicit completion claim. Every other response
+    /// must identify a real target; otherwise `instructionPresented(expectsChange: false)`
+    /// would incorrectly turn an incomplete guide into a completed informational answer.
+    var isActionableGuideResponse: Bool {
+        switch action?.type {
+        case .pointToElement:
+            // A proposed action and a claim that the task is already complete describe
+            // mutually exclusive scene states.
+            return taskComplete != true
+        case .complete:
+            return taskComplete != false && completesTaskAfterSuccess != true
+        case .explain:
+            return false
+        case nil:
+            return taskComplete == true && completesTaskAfterSuccess != true
+        }
     }
 }
 
