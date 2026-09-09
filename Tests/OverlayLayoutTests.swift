@@ -149,7 +149,8 @@ final class OverlayLayoutTests: XCTestCase {
             let arrow = try XCTUnwrap(GuidanceArrowGeometry.layout(
                 target: target,
                 availableSize: frame.size,
-                preferredSide: callout.preferredArrowSide(relativeTo: target)
+                preferredSide: callout.preferredArrowSide(relativeTo: target),
+                avoiding: callout.frame
             ))
             let regions = view.fadeRegions(in: frame.size)
 
@@ -182,6 +183,51 @@ final class OverlayLayoutTests: XCTestCase {
         XCTAssertEqual(arrow.side, preferred)
         XCTAssertEqual(preferred, .bottom)
         XCTAssertGreaterThan(arrow.start.y, arrow.end.y)
+    }
+
+    func testArrowMovesAwayFromTheInstructionCalloutInsteadOfRenderingUnderIt() throws {
+        let target = CGRect(x: 350, y: 250, width: 100, height: 60)
+        let available = CGSize(width: 800, height: 600)
+        let callout = InstructionCalloutGeometry.layout(
+            text: "Choose the highlighted control.",
+            target: target,
+            availableSize: available
+        )
+        let preferred = callout.preferredArrowSide(relativeTo: target)
+        let arrow = try XCTUnwrap(GuidanceArrowGeometry.layout(
+            target: target,
+            availableSize: available,
+            preferredSide: preferred,
+            avoiding: callout.frame
+        ))
+
+        XCTAssertNotEqual(arrow.side, preferred)
+        XCTAssertFalse(arrow.hoverBounds.intersects(callout.frame))
+    }
+
+    func testArrowIsOmittedWhenEveryAvailablePlacementIsObstructed() {
+        let target = CGRect(x: 0, y: 70, width: 300, height: 60)
+        let available = CGSize(width: 300, height: 200)
+
+        XCTAssertNil(GuidanceArrowGeometry.layout(
+            target: target,
+            availableSize: available,
+            preferredSide: .top,
+            avoiding: CGRect(origin: .zero, size: available)
+        ))
+    }
+
+    func testEveryTargetStyleDimsTheBackgroundConsistently() {
+        let target = CGRect(x: 100, y: 100, width: 80, height: 40)
+
+        for style in OverlayStyle.allCases {
+            XCTAssertTrue(
+                OverlayDimmingPolicy.dimsBackground(for: style, targetRect: target),
+                "\(style.rawValue) must use the same dimmed background"
+            )
+        }
+        XCTAssertFalse(OverlayDimmingPolicy.dimsBackground(for: .spotlight, targetRect: nil))
+        XCTAssertEqual(OverlayDimmingPolicy.opacity, 0.52)
     }
 
     func testPurpleInstructionPaletteHasReadableContrast() {

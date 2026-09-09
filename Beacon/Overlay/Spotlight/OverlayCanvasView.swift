@@ -13,19 +13,40 @@ struct OverlayCanvasView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            CursorProximityFade(
-                cursorPositionMonitor: cursorPositionMonitor,
-                movementBaseline: cursorMovementBaseline,
-                screenFrame: screenFrame,
-                fadeRegions: fadeRegions(in: proxy.size)
-            ) {
-                OverlayContentView(
-                    presentation: presentation,
+            ZStack(alignment: .topLeading) {
+                if OverlayDimmingPolicy.dimsBackground(
+                    for: presentation.style,
+                    targetRect: targetRect
+                ), let targetRect {
+                    Canvas { context, size in
+                        var path = Path(CGRect(origin: .zero, size: size))
+                        path.addRoundedRect(
+                            in: targetRect.insetBy(dx: -8, dy: -8),
+                            cornerSize: CGSize(width: 10, height: 10)
+                        )
+                        context.fill(
+                            path,
+                            with: .color(.black.opacity(OverlayDimmingPolicy.opacity)),
+                            style: FillStyle(eoFill: true)
+                        )
+                    }
+                    .allowsHitTesting(false)
+                }
+
+                CursorProximityFade(
+                    cursorPositionMonitor: cursorPositionMonitor,
+                    movementBaseline: cursorMovementBaseline,
                     screenFrame: screenFrame,
-                    mapper: mapper,
-                    availableSize: proxy.size
-                )
-                .equatable()
+                    fadeRegions: fadeRegions(in: proxy.size)
+                ) {
+                    OverlayContentView(
+                        presentation: presentation,
+                        screenFrame: screenFrame,
+                        mapper: mapper,
+                        availableSize: proxy.size
+                    )
+                    .equatable()
+                }
             }
         }
         .ignoresSafeArea()
@@ -52,7 +73,8 @@ struct OverlayCanvasView: View {
         if let arrow = GuidanceArrowGeometry.layout(
             target: targetRect,
             availableSize: availableSize,
-            preferredSide: callout.preferredArrowSide(relativeTo: targetRect)
+            preferredSide: callout.preferredArrowSide(relativeTo: targetRect),
+            avoiding: callout.frame
         ) {
             regions.append(arrow.hoverBounds)
         }
@@ -96,6 +118,16 @@ enum OverlayGeometry {
             in: screenFrame
         )
         return fadeRegions.contains { $0.contains(cursor) }
+    }
+}
+
+enum OverlayDimmingPolicy {
+    static let opacity = 0.52
+
+    /// Highlight shape is a presentation detail; it must never make otherwise identical
+    /// grounded instructions switch between dimmed and undimmed backgrounds.
+    static func dimsBackground(for _: OverlayStyle, targetRect: CGRect?) -> Bool {
+        return targetRect != nil
     }
 }
 
@@ -154,17 +186,6 @@ private struct OverlayContentView: View, Equatable {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            if presentation.style == .spotlight, let targetRect {
-                Canvas { context, size in
-                    var path = Path(CGRect(origin: .zero, size: size))
-                    path.addRoundedRect(
-                        in: targetRect.insetBy(dx: -8, dy: -8),
-                        cornerSize: CGSize(width: 10, height: 10)
-                    )
-                    context.fill(path, with: .color(.black.opacity(0.52)), style: FillStyle(eoFill: true))
-                }
-            }
-
             if let targetRect {
                 let callout = InstructionCalloutGeometry.layout(
                     text: presentation.instruction,
@@ -178,7 +199,8 @@ private struct OverlayContentView: View, Equatable {
                 GuidanceArrow(
                     target: targetRect,
                     availableSize: availableSize,
-                    preferredSide: callout.preferredArrowSide(relativeTo: targetRect)
+                    preferredSide: callout.preferredArrowSide(relativeTo: targetRect),
+                    avoiding: callout.frame
                 )
 
                 InstructionCallout(
@@ -209,13 +231,15 @@ private struct GuidanceArrow: View {
     let target: CGRect
     let availableSize: CGSize
     let preferredSide: GuidanceArrowGeometry.Side
+    let avoiding: CGRect
 
     var body: some View {
         Canvas { context, _ in
             guard let geometry = GuidanceArrowGeometry.layout(
                 target: target,
                 availableSize: availableSize,
-                preferredSide: preferredSide
+                preferredSide: preferredSide,
+                avoiding: avoiding
             ) else {
                 return
             }
@@ -298,7 +322,8 @@ struct GuidanceArrowGeometry: Equatable {
         margin: CGFloat = 22,
         targetGap: CGFloat = 9,
         preferredLength: CGFloat = 78,
-        preferredSide: Side? = nil
+        preferredSide: Side? = nil,
+        avoiding obstacle: CGRect? = nil
     ) -> GuidanceArrowGeometry? {
         guard availableSize.width.isFinite,
               availableSize.height.isFinite,
@@ -319,12 +344,38 @@ struct GuidanceArrowGeometry: Equatable {
             (.bottom, availableSize.height - margin - visibleTarget.maxY),
             (.left, visibleTarget.minX - margin)
         ]
-        let preferredPlacement = preferredSide.flatMap { preferred in
-            clearances.first { $0.0 == preferred && $0.1 >= targetGap + 20 }
+        let eligiblePlacements = clearances.filter { $0.1 >= targetGap + 20 }
+        var placements: [(Side, CGFloat)] = []
+        if let preferredSide,
+           let preferred = eligiblePlacements.first(where: { $0.0 == preferredSide }) {
+            placements.append(preferred)
         }
-        guard let placement = preferredPlacement ?? clearances.max(by: { $0.1 < $1.1 }),
-              placement.1 >= targetGap + 20 else { return nil }
+        placements.append(contentsOf: eligiblePlacements
+            .filter { $0.0 != preferredSide }
+            .sorted { $0.1 > $1.1 })
 
+        return placements.lazy.compactMap { placement in
+            candidate(
+                placement: placement,
+                visibleTarget: visibleTarget,
+                availableSize: availableSize,
+                targetGap: targetGap,
+                preferredLength: preferredLength
+            )
+        }
+        .first { geometry in
+            guard let obstacle else { return true }
+            return !geometry.hoverBounds.intersects(obstacle)
+        }
+    }
+
+    private static func candidate(
+        placement: (Side, CGFloat),
+        visibleTarget: CGRect,
+        availableSize: CGSize,
+        targetGap: CGFloat,
+        preferredLength: CGFloat
+    ) -> GuidanceArrowGeometry {
         let shaftLength = min(preferredLength, placement.1 - targetGap)
         let end: CGPoint
         let start: CGPoint
