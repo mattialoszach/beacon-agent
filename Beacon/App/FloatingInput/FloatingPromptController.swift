@@ -487,7 +487,7 @@ private struct TeacherStatusView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
                     .font(.system(size: 14, weight: .semibold))
-                Text(message)
+                BeaconFormattedText(message)
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                     .lineLimit(3)
@@ -502,7 +502,7 @@ private struct TeacherStatusView: View {
         .frame(width: FloatingPromptLayout.thinkingSize.width, height: FloatingPromptLayout.thinkingSize.height)
         .allowsHitTesting(false)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(title). \(message)")
+        .accessibilityLabel("\(title). \(BeaconMarkdown.plainText(message))")
         .accessibilityHint(mode == .answer ? "Press Escape to dismiss" : "Press Escape to cancel")
     }
 

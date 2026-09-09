@@ -14,8 +14,8 @@ This repository contains the native v0.1 grounding prototype and verified multi-
 - One Ask Beacon entry point with local semantic, structural, and visible-scene intent classification
 - Focused-app Accessibility tree extraction with stable per-scene element IDs
 - One normalized, top-left coordinate space across Retina and multiple displays
-- Consistent click-through spotlight guidance with rectangle or circle target outlines, plus arrows that stay clear of the instruction callout and stop outside the target edge
-- Purple on-screen instructions and arrows for every grounded step, on a system-adaptive material that follows Light or Dark appearance; they start fully visible, then fade near the pointer after it moves
+- Consistent click-through spotlight guidance with rectangle or circle target outlines, plus arrows that use the free side of the target, stay clear of the instruction callout, and stop outside the target edge
+- Purple on-screen instructions and arrows for every grounded step, on a system-adaptive material that follows Light or Dark appearance; model emphasis such as **bold** and *italic* text is rendered natively, and guidance starts fully visible before fading near the pointer after it moves
 - Focus-safe teacher status HUD that explains when Beacon is checking or waiting for the user
 - Stale-scene protection that follows app/window changes with fresh guidance and waits for vanished controls or closed menus to return
 - Overlay target tracking while windows move

@@ -158,9 +158,10 @@ private struct HomeView: View {
                             Text(controller.currentQuestion ?? "")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                            Text(response.message).font(.title3.weight(.semibold))
+                            BeaconFormattedText(response.message)
+                                .font(.title3.weight(.semibold))
                             if let confirmation = controller.confirmationMessage {
-                                Text("Check the result: \(confirmation)")
+                                BeaconFormattedText("Check the result: \(confirmation)")
                                 Text("Beacon needs your confirmation before continuing.")
                                     .font(.callout).foregroundStyle(.secondary)
                                 HStack {
@@ -226,7 +227,7 @@ private struct HistoryView: View {
                                     .foregroundStyle(succeeded ? .green : .red)
                             }
                         }
-                        Text(item.answer)
+                        BeaconFormattedText(item.answer)
                         Text("\(item.applicationName) · \(item.date.formatted(date: .abbreviated, time: .shortened))")
                             .font(.caption)
                             .foregroundStyle(.secondary)

@@ -165,7 +165,7 @@ final class OverlayLayoutTests: XCTestCase {
         }
     }
 
-    func testArrowEmergesFromTheCalloutSideWhenSpaceAllows() throws {
+    func testArrowUsesTheSideOppositeTheCalloutWhenSpaceAllows() throws {
         let target = CGRect(x: 350, y: 250, width: 100, height: 60)
         let available = CGSize(width: 800, height: 600)
         let callout = InstructionCalloutGeometry.layout(
@@ -181,11 +181,11 @@ final class OverlayLayoutTests: XCTestCase {
         ))
 
         XCTAssertEqual(arrow.side, preferred)
-        XCTAssertEqual(preferred, .bottom)
-        XCTAssertGreaterThan(arrow.start.y, arrow.end.y)
+        XCTAssertEqual(preferred, .top)
+        XCTAssertLessThan(arrow.start.y, arrow.end.y)
     }
 
-    func testArrowMovesAwayFromTheInstructionCalloutInsteadOfRenderingUnderIt() throws {
+    func testArrowRemainsSeparateFromTheInstructionCallout() throws {
         let target = CGRect(x: 350, y: 250, width: 100, height: 60)
         let available = CGSize(width: 800, height: 600)
         let callout = InstructionCalloutGeometry.layout(
@@ -201,7 +201,7 @@ final class OverlayLayoutTests: XCTestCase {
             avoiding: callout.frame
         ))
 
-        XCTAssertNotEqual(arrow.side, preferred)
+        XCTAssertEqual(arrow.side, preferred)
         XCTAssertFalse(arrow.hoverBounds.intersects(callout.frame))
     }
 

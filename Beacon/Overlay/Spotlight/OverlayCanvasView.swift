@@ -435,7 +435,9 @@ struct InstructionCalloutGeometry: Equatable {
     }
 
     func preferredArrowSide(relativeTo target: CGRect) -> GuidanceArrowGeometry.Side {
-        position.y < target.midY ? .top : .bottom
+        // The callout already occupies one side of the target. Start on the opposite
+        // side so the arrow remains fully visible instead of running underneath it.
+        position.y < target.midY ? .bottom : .top
     }
 
     static func layout(
@@ -443,12 +445,22 @@ struct InstructionCalloutGeometry: Equatable {
         target: CGRect,
         availableSize: CGSize
     ) -> InstructionCalloutGeometry {
-        let width = max(180, min(420, availableSize.width - 24))
-        let charactersPerLine = max(18, Int((width - 58) / 7))
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).reduce(0) { count, line in
-            count + max(1, Int(ceil(Double(line.count) / Double(charactersPerLine))))
-        }
-        let height = 38 + CGFloat(lines * 18)
+        let maximumWidth = max(1, min(420, availableSize.width - 24))
+        let font = NSFont.systemFont(ofSize: 14, weight: .semibold)
+        let singleLineWidth = (text as NSString).size(withAttributes: [.font: font]).width
+        let width = min(maximumWidth, max(min(220, maximumWidth), ceil(singleLineWidth) + 58))
+        let textWidth = max(1, width - 58)
+        let measuredText = (text as NSString).boundingRect(
+            with: CGSize(width: textWidth, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: font]
+        )
+        // Markdown markers make this estimate slightly wider than the attributed text,
+        // which is intentional: collision avoidance must never underestimate the callout.
+        let height = min(
+            max(1, availableSize.height - 24),
+            max(56, ceil(measuredText.height) + 20)
+        )
         let x = min(
             max(width / 2 + 12, target.midX),
             availableSize.width - width / 2 - 12
@@ -511,7 +523,7 @@ private struct InstructionCallout: View {
         HStack(spacing: 8) {
             Image(systemName: directionIcon)
                 .foregroundStyle(instructionColor)
-            Text(text)
+            BeaconFormattedText(text)
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(instructionColor)
                 .fixedSize(horizontal: false, vertical: true)
