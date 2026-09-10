@@ -3,8 +3,8 @@
 ## Release decision
 
 Ready for owner acceptance testing on real applications. **Not yet approved for public
-distribution**: the app is still ad-hoc signed and unnotarized, and no license has been
-selected. Passing tests and a clean packaging run do not establish end-to-end correctness
+distribution**: the app is still ad-hoc signed and unnotarized. The repository is licensed
+under the MIT License. Passing tests and a clean packaging run do not establish end-to-end correctness
 across real applications, permissions, displays, or cloud accounts.
 
 This pass audited the codebase across thirteen review dimensions — request lifecycle and
@@ -95,7 +95,8 @@ An ad-hoc signature is identified only by its code hash, so every rebuild is a d
 principal to macOS: Accessibility and Screen Recording must be re-enabled and the Keychain
 prompts again. Use a stable signing identity for repeated local testing.
 
-**Select the repository license before distributing binaries or accepting contributions.**
+The repository is licensed under the MIT License. Include the `LICENSE` file with source
+distributions.
 
 ### Verification the owner must still do
 

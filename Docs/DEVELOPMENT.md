@@ -81,7 +81,7 @@ This follows Apple's [distribution signing](https://developer.apple.com/document
 
 Before public distribution:
 
-- Select the project license.
+- Confirm the MIT `LICENSE` file is included with the source distribution.
 - Run acceptance tests with the signed app, including first launch, permission denial/regrant, and permission persistence across an update.
 - Validate the final downloaded/quarantined artifact on a clean Mac.
 - Test mixed-scale displays, display disconnection, Preview PDF export from JPEG/PNG, and cancelled export dialogs.
