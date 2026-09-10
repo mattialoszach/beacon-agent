@@ -1,8 +1,15 @@
+<p align="center">
+  <img src="Beacon/Resources/Images/AppIcon.png" alt="Beacon app icon" width="150">
+</p>
+
 # Beacon
 
 **Ask. See. Do.**
 
 Beacon is a privacy-first macOS instructor. Press **Option + Space**, ask how to do something in the app in front of you, and Beacon highlights the real accessible control without taking over your mouse.
+
+> [!NOTE]
+> Beacon is still under active construction. Features, behavior, and setup requirements may change as development continues.
 
 This repository contains the native v0.1 grounding prototype and verified multi-step guide loop described in the product brief.
 
